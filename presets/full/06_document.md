@@ -1,7 +1,7 @@
 ---
 stage: "06_document"
 role: "feature_documentation"
-preferred_model: "Gemini"
+preferred_model: "Antigravity"
 model_policy: "preferred_not_hard_block"
 required_inputs:
   - ".ai/features/[기능명]/00_spec.md"
@@ -37,7 +37,7 @@ default_next_stage: "done"
 
 ## 실행 정책
 
-- 권장 담당 모델은 Gemini이다.
+- 권장 담당 모델은 Antigravity이다.
 - 다른 모델이 이 단계를 실행하더라도 중지하지 않는다.
 - 담당 모델이 권장 모델과 다르면 `06_document.md`의 `## 단계 결과`에 `model_mismatch: true`와 실제 실행 모델을 기록한다.
 - 이 단계는 검증을 통과한 기능에 대한 개발자용 명세서를 생성하는 단계이다.

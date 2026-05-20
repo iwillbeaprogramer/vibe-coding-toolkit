@@ -59,7 +59,7 @@ DOCUMENT_STAGE: str | None = "06_document"
 PROVIDER_BY_MODEL = {
     "Codex": "codex",
     "Claude": "claude",
-    "Gemini": "gemini",
+    "Antigravity": "agy",
 }
 
 DEFAULT_PROVIDER_COMMANDS = {
@@ -81,15 +81,14 @@ DEFAULT_PROVIDER_COMMANDS = {
         "--output-format",
         "text",
     ],
-    "gemini": [
-        "gemini.cmd",
-        "--prompt",
-        "",
-        "--skip-trust",
-        "--approval-mode",
-        "yolo",
-        "--output-format",
-        "text",
+    "agy": [
+        "agy.exe",
+        "--add-dir",
+        "{cwd}",
+        "--print",
+        "--print-timeout",
+        "30m",
+        "--dangerously-skip-permissions",
     ],
 }
 
@@ -1541,7 +1540,7 @@ def print_status(feature: str | None) -> None:
 
 
 def print_providers() -> None:
-    for provider in ["codex", "claude", "gemini"]:
+    for provider in ["codex", "claude", "agy"]:
         command = provider_command(provider)
         executable = resolve_executable(command)
         print(f"{provider}: {'ok' if executable else 'missing'}")

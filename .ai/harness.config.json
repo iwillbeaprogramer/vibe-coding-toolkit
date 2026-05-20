@@ -1,0 +1,39 @@
+{
+  "verification": {
+    "enabled": true,
+    "required": true,
+    "timeout_seconds": 600,
+    "commands": [
+      {
+        "name": "backend_unittest",
+        "command": [
+          "python",
+          "-m",
+          "unittest",
+          "discover",
+          "backend\\tests"
+        ]
+      },
+      {
+        "name": "frontend_build",
+        "command": [
+          "npm.cmd",
+          "--prefix",
+          "frontend",
+          "run",
+          "build"
+        ]
+      },
+      {
+        "name": "git_diff_check",
+        "command": [
+          "git",
+          "-c",
+          "safe.directory={root}",
+          "diff",
+          "--check"
+        ]
+      }
+    ]
+  }
+}

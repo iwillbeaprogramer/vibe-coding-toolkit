@@ -1,7 +1,7 @@
 ---
 stage: "01_plan"
 role: "implementation_plan"
-preferred_model: "Gemini"
+preferred_model: "Antigravity"
 model_policy: "preferred_not_hard_block"
 required_inputs:
   - ".ai/features/[기능명]/00_spec.md"
@@ -22,7 +22,7 @@ default_next_stage: "02_develop"
 
 ## 실행 정책
 
-- 권장 담당 모델은 Gemini이다.
+- 권장 담당 모델은 Antigravity이다.
 - 다른 모델이 이 단계를 실행하더라도 중지하지 않는다.
 - 담당 모델이 권장 모델과 다르면 `01_plan.md`의 `## 단계 결과`에 `model_mismatch: true`와 실제 실행 모델을 기록한다.
 - 이 단계는 구현 전에 "어떻게 만들지"를 결정하는 단계이다.

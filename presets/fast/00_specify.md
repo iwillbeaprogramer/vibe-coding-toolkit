@@ -1,7 +1,7 @@
 ---
 stage: "00_specify"
 role: "fast_specification_and_plan"
-preferred_model: "Gemini"
+preferred_model: "Antigravity"
 model_policy: "preferred_not_hard_block"
 required_inputs:
   - "user_request"
@@ -22,7 +22,7 @@ default_next_stage: "01_develop"
 
 ## 실행 정책
 
-- 권장 담당 모델은 Gemini이다.
+- 권장 담당 모델은 Antigravity이다.
 - 다른 모델이 이 단계를 실행하더라도 중지하지 않는다.
 - 담당 모델이 권장 모델과 다르면 `00_spec.md`의 `## 단계 결과`에 `model_mismatch: true`와 실제 실행 모델을 기록한다.
 - 이 단계는 기존 full 파이프라인의 `00_specify`와 `01_plan`을 합친 빠른 작업 정의 단계이다.
