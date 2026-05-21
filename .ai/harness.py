@@ -48,6 +48,9 @@ COMMIT_STAGES = {"02_develop", "04_fix", "05_verify"}
 NO_COMMIT_STAGES = {"00_specify", "01_plan", "03_review", "06_document"}
 DEFAULT_MAX_VERIFY_FIX_RETRIES = 3
 DEFAULT_VERIFY_COMMAND_TIMEOUT_SECONDS = 600
+DEFAULT_PROVIDER_HEARTBEAT_SECONDS = 30
+DEFAULT_WATCH_INTERVAL_SECONDS = 5
+DEFAULT_DOCTOR_DEEP_TIMEOUT_SECONDS = 60
 
 START_STAGE = "00_specify"
 DEVELOP_STAGE = "02_develop"
@@ -85,6 +88,8 @@ DEFAULT_PROVIDER_COMMANDS = {
         "agy.exe",
         "--add-dir",
         "{cwd}",
+        "--log-file",
+        "{log_file}",
         "--print",
         "--print-timeout",
         "30m",
@@ -92,9 +97,130 @@ DEFAULT_PROVIDER_COMMANDS = {
     ],
 }
 
+DEFAULT_PERFORMANCE = "medium"
+
+PERFORMANCE_PROFILES = {
+    "high": {
+        "codex": {
+            "model": "gpt-5.5",
+            "model_reasoning_effort": "xhigh",
+        },
+        "claude": {
+            "model": "claude-opus-4-7",
+            "effort": "xhigh",
+        },
+        "agy": {
+            "model": "Gemini 3.5 Flash (High)",
+        },
+    },
+    "medium": {
+        "codex": {
+            "model": "gpt-5.5",
+            "model_reasoning_effort": "high",
+        },
+        "claude": {
+            "model": "claude-opus-4-7",
+            "effort": "high",
+        },
+        "agy": {
+            "model": "Gemini 3.5 Flash (High)",
+        },
+    },
+    "lite": {
+        "codex": {
+            "model": "gpt-5.5",
+            "model_reasoning_effort": "medium",
+        },
+        "claude": {
+            "model": "claude-sonnet-4-6",
+            "effort": "high",
+        },
+        "agy": {
+            "model": "Gemini 3.5 Flash (Medium)",
+        },
+    },
+}
+
 
 class HarnessError(RuntimeError):
     pass
+
+
+COLOR_CODES = {
+    "bold": "1",
+    "dim": "2",
+    "red": "31",
+    "green": "32",
+    "yellow": "33",
+    "blue": "34",
+    "magenta": "35",
+    "cyan": "36",
+}
+
+
+def color_enabled() -> bool:
+    if os.environ.get("NO_COLOR"):
+        return False
+    return bool(getattr(sys.stdout, "isatty", lambda: False)() or getattr(sys.stderr, "isatty", lambda: False)())
+
+
+def color_text(text: str, *styles: str) -> str:
+    if not color_enabled() or not styles:
+        return text
+    codes = [COLOR_CODES[style] for style in styles if style in COLOR_CODES]
+    if not codes:
+        return text
+    return f"\033[{';'.join(codes)}m{text}\033[0m"
+
+
+def event_line_for_console(line: str, event: str) -> str:
+    event = event.lower()
+    if "blocked" in event or "failed" in event:
+        return color_text(line, "red", "bold")
+    if "complete" in event or "created" in event or "advanced" in event or "approved" in event:
+        return color_text(line, "green")
+    if "started" in event or event in {"auto_step", "prompt_generated"}:
+        return color_text(line, "cyan")
+    if "retry" in event or "skipped" in event:
+        return color_text(line, "yellow")
+    return line
+
+
+def status_style(status: str) -> tuple[str, ...]:
+    status = status.lower()
+    if status in {"complete", "model_completed"}:
+        return ("green", "bold")
+    if status in {"blocked"}:
+        return ("red", "bold")
+    if status in {"model_running", "waiting_for_model"}:
+        return ("cyan", "bold")
+    if status in {"created"}:
+        return ("yellow", "bold")
+    return ("bold",)
+
+
+def format_duration(seconds: float) -> str:
+    seconds_i = max(0, int(seconds))
+    hours, rem = divmod(seconds_i, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def format_bytes(size: int) -> str:
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KB"
+    return f"{size / (1024 * 1024):.1f} MB"
+
+
+def file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
 
 
 def now_stamp() -> str:
@@ -148,6 +274,156 @@ def git(args: list[str], check: bool = True) -> subprocess.CompletedProcess[str]
 
 def git_output(args: list[str]) -> str:
     return git(args).stdout.strip()
+
+
+def git_upstream_ref() -> str | None:
+    proc = git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], check=False)
+    if proc.returncode != 0:
+        return None
+    upstream = proc.stdout.strip()
+    return upstream or None
+
+
+def unpushed_commit_lines() -> tuple[str | None, list[str]]:
+    upstream = git_upstream_ref()
+    if not upstream:
+        return None, []
+    proc = git(["log", "--oneline", "--no-decorate", f"{upstream}..HEAD"], check=False)
+    if proc.returncode != 0:
+        return upstream, []
+    return upstream, [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+
+
+def group_harness_commit_lines(commits: list[str]) -> tuple[dict[str, list[tuple[str, str]]], list[str]]:
+    grouped: dict[str, list[tuple[str, str]]] = {}
+    other: list[str] = []
+    pattern = re.compile(
+        r"^(?P<sha>[0-9a-f]+)\s+"
+        r"\[(?P<feature>[^\]]+)\]\[(?P<stamp>[^\]]+)\]\[(?P<stage>[^\]]+)\]"
+    )
+    for line in commits:
+        match = pattern.match(line)
+        if not match:
+            other.append(line)
+            continue
+        grouped.setdefault(match.group("feature"), []).append(
+            (match.group("stage"), match.group("sha"))
+        )
+    return grouped, other
+
+
+def format_unpushed_commits_message(upstream: str, commits: list[str]) -> str:
+    count = len(commits)
+    grouped, other = group_harness_commit_lines(commits)
+    lines = [
+        color_text("새 파이프라인을 시작할 수 없습니다.", "red", "bold"),
+        "",
+        (
+            f"현재 브랜치에 원격({upstream})에 반영되지 않은 커밋이 "
+            f"{color_text(str(count), 'yellow', 'bold')}개 있습니다."
+        ),
+        "하네스는 한 번의 새 파이프라인을 하나의 기능 단위로 취급합니다.",
+        "이전 기능의 커밋을 먼저 원격에 반영한 뒤 다시 시작하세요.",
+        "",
+    ]
+    if grouped:
+        lines.append(color_text("미반영 하네스 기능:", "yellow", "bold"))
+        for feature, stage_commits in grouped.items():
+            lines.append(f"  - {feature}")
+            lines.extend(f"    - {stage} {sha}" for stage, sha in stage_commits)
+    if other:
+        if grouped:
+            lines.append("")
+        lines.append(color_text("미반영 기타 커밋:", "yellow", "bold"))
+        lines.extend(f"  - {line}" for line in other[:20])
+        if len(other) > 20:
+            lines.append(f"  - ... and {len(other) - 20} more")
+    lines.extend(
+        [
+            "",
+            f"{color_text('권장 조치:', 'green', 'bold')} git push",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def assert_no_unpushed_commits_for_new_run() -> None:
+    upstream, commits = unpushed_commit_lines()
+    if upstream and commits:
+        raise HarnessError(format_unpushed_commits_message(upstream, commits))
+
+
+def incomplete_run_summaries() -> list[dict[str, str]]:
+    if not RUNS_DIR.exists():
+        return []
+    summaries: list[dict[str, str]] = []
+    for path in sorted(RUNS_DIR.glob("*/run.json")):
+        try:
+            parsed = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            summaries.append(
+                {
+                    "feature": path.parent.name,
+                    "status": "unreadable",
+                    "stage": "-",
+                    "reason": str(exc),
+                }
+            )
+            continue
+        if not isinstance(parsed, dict):
+            summaries.append(
+                {
+                    "feature": path.parent.name,
+                    "status": "invalid",
+                    "stage": "-",
+                    "reason": "run.json is not an object",
+                }
+            )
+            continue
+        status = str(parsed.get("status") or "unknown")
+        if status == "complete":
+            continue
+        blocked = parsed.get("blocked")
+        reason = str(blocked.get("reason") or "") if isinstance(blocked, dict) else ""
+        summaries.append(
+            {
+                "feature": str(parsed.get("feature_name") or path.parent.name),
+                "status": status,
+                "stage": str(parsed.get("current_stage") or "-"),
+                "reason": reason,
+            }
+        )
+    return summaries
+
+
+def format_incomplete_runs_message(runs: list[dict[str, str]]) -> str:
+    lines = [
+        color_text("새 파이프라인을 시작할 수 없습니다.", "red", "bold"),
+        "",
+        f"완료되지 않은 하네스 run이 {color_text(str(len(runs)), 'yellow', 'bold')}개 있습니다.",
+        "하네스는 한 번의 새 파이프라인을 하나의 기능 단위로 취급합니다.",
+        "기존 run을 먼저 정리한 뒤 다시 시작하세요.",
+        "",
+        color_text("미완료 run:", "yellow", "bold"),
+    ]
+    for run in runs:
+        lines.append(f"  - {run['feature']}: {run['status']} at {run['stage']}")
+        reason = run.get("reason", "")
+        if reason:
+            lines.append(f"    reason: {reason[:200]}")
+    lines.extend(
+        [
+            "",
+            f"{color_text('권장 조치:', 'green', 'bold')} resume / retry / cleanup",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def assert_no_incomplete_runs_for_new_run() -> None:
+    runs = incomplete_run_summaries()
+    if runs:
+        raise HarnessError(format_incomplete_runs_message(runs))
 
 
 def git_changed_paths() -> list[str]:
@@ -352,13 +628,124 @@ def load_config() -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def provider_command(provider: str) -> list[str]:
+def raw_provider_command(provider: str) -> list[str]:
     config = load_config()
     configured = config.get("providers", {}).get(provider, {}).get("command")
     command = configured or DEFAULT_PROVIDER_COMMANDS.get(provider)
     if not command:
         raise HarnessError(f"No provider command configured for {provider}")
-    return [str(part).replace("{cwd}", str(ROOT)) for part in command]
+    return [str(part) for part in command]
+
+
+def normalize_performance(value: Any | None) -> str:
+    if value is None or str(value).strip() == "":
+        return DEFAULT_PERFORMANCE
+    performance = str(value).strip().lower()
+    if performance not in PERFORMANCE_PROFILES:
+        allowed = ", ".join(PERFORMANCE_PROFILES)
+        raise HarnessError(f"Unknown performance profile {value!r}. Expected one of: {allowed}.")
+    return performance
+
+
+def performance_profile(value: Any | None) -> dict[str, dict[str, str]]:
+    return PERFORMANCE_PROFILES[normalize_performance(value)]
+
+
+def provider_performance_settings(provider: str, performance: Any | None) -> dict[str, str]:
+    return dict(performance_profile(performance).get(provider, {}))
+
+
+def command_has_option(command: list[str], *options: str) -> bool:
+    for part in command:
+        if part in options:
+            return True
+        for option in options:
+            if option.startswith("--") and part.startswith(f"{option}="):
+                return True
+    return False
+
+
+def command_has_config_key(command: list[str], key: str) -> bool:
+    return any(key in part for part in command)
+
+
+def append_before_stdin_prompt(command: list[str], extra: list[str]) -> list[str]:
+    if command and command[-1] == "-":
+        return command[:-1] + extra + ["-"]
+    return command + extra
+
+
+def apply_performance_to_command(
+    provider: str,
+    command: list[str],
+    performance: Any | None,
+) -> list[str]:
+    settings = provider_performance_settings(provider, performance)
+    if provider == "codex":
+        extra: list[str] = []
+        model = settings.get("model")
+        effort = settings.get("model_reasoning_effort")
+        if model and not command_has_option(command, "--model", "-m"):
+            extra.extend(["--model", model])
+        if effort and not command_has_config_key(command, "model_reasoning_effort"):
+            extra.extend(["-c", f'model_reasoning_effort="{effort}"'])
+        return append_before_stdin_prompt(command, extra) if extra else command
+    if provider == "claude":
+        extra = []
+        model = settings.get("model")
+        effort = settings.get("effort")
+        if model and not command_has_option(command, "--model"):
+            extra.extend(["--model", model])
+        if effort and not command_has_option(command, "--effort"):
+            extra.extend(["--effort", effort])
+        return append_before_stdin_prompt(command, extra) if extra else command
+    return command
+
+
+def prepare_provider_command(
+    provider: str,
+    prompt_text: str | None = None,
+    prompt_file: Path | None = None,
+    log_file: Path | None = None,
+    performance: Any | None = None,
+) -> tuple[list[str], bool]:
+    uses_prompt_placeholder = False
+    command: list[str] = []
+    for part in raw_provider_command(provider):
+        rendered = part.replace("{cwd}", str(ROOT))
+        if "{log_file}" in rendered:
+            rendered = rendered.replace("{log_file}", str(log_file) if log_file is not None else "<log_file>")
+        if "{prompt_file}" in rendered and prompt_file is not None:
+            rendered = rendered.replace("{prompt_file}", str(prompt_file))
+        if "{prompt_file_instruction}" in rendered:
+            uses_prompt_placeholder = True
+            if prompt_file is None:
+                instruction = "<prompt>"
+            else:
+                instruction = (
+                    "Read the harness prompt file at "
+                    f"{prompt_file} and execute every instruction in it. "
+                    "Write the required repository files exactly as specified. "
+                    "Do not summarize only; perform the task."
+                )
+            rendered = rendered.replace("{prompt_file_instruction}", instruction)
+        if "{prompt}" in rendered:
+            uses_prompt_placeholder = True
+            rendered = rendered.replace("{prompt}", prompt_text if prompt_text is not None else "<prompt>")
+        command.append(rendered)
+    command = apply_performance_to_command(provider, command, performance)
+    return command, uses_prompt_placeholder
+
+
+def provider_command(provider: str) -> list[str]:
+    command, _ = prepare_provider_command(provider)
+    return command
+
+
+def redact_prompt_command(command: list[str], prompt_text: str | None) -> list[str]:
+    if not prompt_text:
+        return command
+    return ["<prompt>" if part == prompt_text else part.replace(prompt_text, "<prompt>") for part in command]
 
 
 def expand_runtime_placeholders(value: Any, feature: str) -> str:
@@ -458,6 +845,11 @@ def stage_output_path(feature: str, stage: str) -> Path:
     return feature_dir(feature) / STAGE_OUTPUTS[stage]
 
 
+def stage_result_json_path(feature: str, stage: str) -> Path:
+    output = stage_output_path(feature, stage)
+    return output.with_name(f"{output.stem}.result.json")
+
+
 def load_state(feature: str) -> dict[str, Any]:
     path = state_path(feature)
     if not path.exists():
@@ -514,7 +906,7 @@ def log_event(
         {"at": timestamp, "event": event, "stage": stage, "message": message, **fields}
     )
     if console:
-        print(line, flush=True)
+        print(event_line_for_console(line, event), flush=True)
 
 
 def find_stage_result(text: str) -> dict[str, Any]:
@@ -526,11 +918,20 @@ def find_stage_result(text: str) -> dict[str, Any]:
     if start is None:
         return {}
 
-    result: dict[str, Any] = {}
-    current_key: str | None = None
+    section_lines: list[str] = []
     for line in lines[start:]:
         if line.startswith("## "):
             break
+        section_lines.append(line)
+    section = "\n".join(section_lines).strip()
+
+    json_result = parse_result_json_from_text(section)
+    if json_result:
+        return json_result
+
+    result: dict[str, Any] = {}
+    current_key: str | None = None
+    for line in section_lines:
         stripped = line.strip()
         if not stripped:
             continue
@@ -555,6 +956,33 @@ def find_stage_result(text: str) -> dict[str, Any]:
     return result
 
 
+def parse_result_json_from_text(text: str) -> dict[str, Any]:
+    fence = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.S | re.I)
+    if fence:
+        text = fence.group(1).strip()
+    else:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return {}
+        text = text[start : end + 1]
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def read_stage_result_json(path: Path) -> dict[str, Any]:
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise HarnessError(f"Invalid stage result JSON in {rel(path)}: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise HarnessError(f"Stage result JSON must be an object: {rel(path)}")
+    return parsed
+
+
 def parse_result_scalar(value: str) -> Any:
     value = value.strip()
     low = value.lower()
@@ -576,10 +1004,21 @@ def extract_feature_name(spec_text: str) -> str | None:
 
 def maybe_rename_feature(state: dict[str, Any]) -> dict[str, Any]:
     old = state["feature_name"]
+    if state.get("feature_name_locked"):
+        return state
     spec_path = stage_output_path(old, START_STAGE)
     if not spec_path.exists():
         return state
     feature_name = extract_feature_name(spec_path.read_text(encoding="utf-8"))
+    if not feature_name:
+        result_json = stage_result_json_path(old, START_STAGE)
+        if result_json.exists():
+            try:
+                json_feature = read_stage_result_json(result_json).get("feature_name")
+            except HarnessError:
+                json_feature = None
+            if isinstance(json_feature, str):
+                feature_name = json_feature
     if not feature_name or feature_name == old:
         return state
     if not validate_slug(feature_name):
@@ -692,6 +1131,9 @@ def write_policy_violations(state: dict[str, Any], stage: str) -> list[str]:
         changed_paths = changed_since_snapshot(before_snapshot, feature)
 
     allowed = [expand_policy_item(item, feature) for item in meta.get("allowed_writes", [])]
+    if stage in STAGES:
+        allowed.append(rel(stage_output_path(feature, stage)))
+        allowed.append(rel(stage_result_json_path(feature, stage)))
     forbidden = [expand_policy_item(item, feature) for item in meta.get("forbidden_writes", [])]
     violations: list[str] = []
 
@@ -720,8 +1162,97 @@ def stage_status(result: dict[str, Any]) -> str:
 def run_status_line(state: dict[str, Any]) -> str:
     return (
         f"{state['feature_name']}: status={state.get('status')} "
-        f"stage={state.get('current_stage')} prompt={state.get('current_prompt')}"
+        f"stage={state.get('current_stage')} performance={normalize_performance(state.get('performance'))} "
+        f"prompt={state.get('current_prompt')}"
     )
+
+
+def status_value(text: str) -> str:
+    return color_text(text, *status_style(text))
+
+
+def print_status_field(label: str, value: str, *styles: str) -> None:
+    label_text = color_text(f"{label:<14}", "dim")
+    value_text = color_text(value, *styles) if styles else value
+    print(f"{label_text} {value_text}")
+
+
+def last_event_summary(state: dict[str, Any]) -> str:
+    events = state.get("events", [])
+    if not events:
+        return "없음"
+    event = events[-1]
+    stage = event.get("stage") or "-"
+    name = event.get("event") or "-"
+    message = event.get("message") or ""
+    at = event.get("at") or ""
+    return f"{at} [{stage}] {name}: {message}"
+
+
+def next_action_hint(state: dict[str, Any], expected_output: Path | None) -> tuple[str, tuple[str, ...]]:
+    status = str(state.get("status") or "")
+    if status == "complete":
+        return "완료되었습니다.", ("green", "bold")
+    if status == "blocked":
+        return "blocked 이유를 확인한 뒤 수정하거나 승인/재실행하세요.", ("red", "bold")
+    if expected_output and not expected_output.exists() and status in {"model_completed", "waiting_for_model"}:
+        return "필수 산출물이 없으면 로그를 확인하고 현재 stage를 다시 실행하세요.", ("yellow", "bold")
+    if status == "waiting_for_model":
+        return "현재 prompt를 provider가 실행해야 합니다.", ("cyan", "bold")
+    if status == "model_running":
+        return "provider가 실행 중입니다. heartbeat 로그를 기다리세요.", ("cyan", "bold")
+    return "현재 상태를 기준으로 다음 하네스 명령을 실행하세요.", ("cyan", "bold")
+
+
+def print_detailed_status(state: dict[str, Any]) -> None:
+    feature = state["feature_name"]
+    stage = str(state.get("current_stage") or "")
+    status = str(state.get("status") or "")
+    expected_output: Path | None = None
+    expected_result_json: Path | None = None
+    provider = "-"
+    attempt = "-"
+    if stage in STAGES:
+        expected_output = stage_output_path(feature, stage)
+        expected_result_json = stage_result_json_path(feature, stage)
+        attempt = str(state.get("attempts", {}).get(stage, 0) or 0)
+        try:
+            provider = provider_for_stage(stage)
+        except HarnessError:
+            provider = "-"
+
+    print(color_text(feature, "bold"))
+    print_status_field("performance", normalize_performance(state.get("performance")), "cyan")
+    print_status_field("모드", str(state.get("pipeline_mode") or PIPELINE_MODE))
+    print_status_field("상태", status, *status_style(status))
+    print_status_field("단계", stage or "-")
+    print_status_field("담당", provider, "magenta", "bold" if provider != "-" else "dim")
+    print_status_field("시도", attempt)
+    if state.get("current_prompt"):
+        print_status_field("프롬프트", str(state["current_prompt"]), "cyan")
+    if expected_output:
+        exists = expected_output.exists()
+        print_status_field("예상 산출물", rel(expected_output), "cyan")
+        print_status_field("산출물 상태", "있음" if exists else "없음", "green" if exists else "red", "bold")
+    if expected_result_json:
+        exists = expected_result_json.exists()
+        print_status_field("result JSON", rel(expected_result_json), "cyan")
+        print_status_field("JSON 상태", "있음" if exists else "없음", "green" if exists else "yellow", "bold")
+    if state.get("last_harness_verification"):
+        print_status_field("최근 검증", str(state["last_harness_verification"]), "cyan")
+    if state.get("last_handoff"):
+        print_status_field("handoff", str(state["last_handoff"]), "yellow")
+    print_status_field("마지막 이벤트", last_event_summary(state))
+    hint, styles = next_action_hint(state, expected_output)
+    print_status_field("다음 조치", hint, *styles)
+
+    if state.get("blocked"):
+        print()
+        print(color_text("blocked 상세:", "red", "bold"))
+        print(json.dumps(state["blocked"], ensure_ascii=False, indent=2))
+    if state.get("commits"):
+        print()
+        print_status_field("commits", json.dumps(state.get("commits", {}), ensure_ascii=False))
 
 
 def prompt_path(state: dict[str, Any], stage: str) -> Path:
@@ -733,11 +1264,12 @@ def prompt_path(state: dict[str, Any], stage: str) -> Path:
     return prompt_dir / f"{stage}_attempt{attempt}.md"
 
 
-def generate_prompt(state: dict[str, Any], stage: str) -> Path:
+def generate_prompt(state: dict[str, Any], stage: str, retry_context: str | None = None) -> Path:
     feature = state["feature_name"]
     meta, body, raw = read_preset(stage)
     preset_text = raw.replace("[기능명]", feature)
     output = stage_output_path(feature, stage)
+    result_json = stage_result_json_path(feature, stage)
     state.setdefault("stage_file_snapshots", {})[stage] = file_policy_snapshot(feature)
     defaults_mode = bool(state.get("defaults_mode"))
     decision_policy = (
@@ -756,12 +1288,18 @@ def generate_prompt(state: dict[str, Any], stage: str) -> Path:
         prev_path = stage_output_path(feature, prev)
         if prev_path.exists():
             previous_outputs.append(f"- {rel(prev_path)}")
+        prev_result_json = stage_result_json_path(feature, prev)
+        if prev_result_json.exists():
+            previous_outputs.append(f"- {rel(prev_result_json)}")
 
     additional_inputs: list[str] = []
     if stage == VERIFY_RETRY_TARGET_STAGE:
         verify_path = stage_output_path(feature, VERIFY_STAGE)
         if verify_path.exists():
             additional_inputs.append(f"- {rel(verify_path)}")
+        verify_result_json = stage_result_json_path(feature, VERIFY_STAGE)
+        if verify_result_json.exists():
+            additional_inputs.append(f"- {rel(verify_result_json)}")
         latest_verify_path = latest_verification_result_path(feature)
         if latest_verify_path.exists():
             additional_inputs.append(f"- {rel(latest_verify_path)}")
@@ -773,10 +1311,13 @@ def generate_prompt(state: dict[str, Any], stage: str) -> Path:
 - pipeline_mode: {PIPELINE_MODE}
 - stage: {stage}
 - preferred_model: {meta.get("preferred_model", "")}
+- performance: {normalize_performance(state.get("performance"))}
 - output_file: {rel(output)}
+- result_json_file: {rel(result_json)}
 - run_state: {rel(state_path(feature))}
 - generated_at: {iso_now()}
 - defaults_mode: {str(defaults_mode).lower()}
+- feature_name_locked: {str(bool(state.get("feature_name_locked"))).lower()}
 
 ## Decision Policy
 {decision_policy}
@@ -784,14 +1325,27 @@ def generate_prompt(state: dict[str, Any], stage: str) -> Path:
 ## Manual Provider Instructions
 1. The local harness is executing this prompt with the preferred model when possible.
 2. Make the requested file changes directly in the repository.
-3. Write the required stage output file exactly at `{rel(output)}`.
-4. Do not run `git commit`, `git reset`, `git checkout`, `git rebase`, or `git push`. The local harness owns Git history.
-5. This Git ownership rule overrides any preset text that appears to ask the model to create, amend, or push commits.
-6. For commit stages, leave the working tree commit-ready and record commit intent in the stage output; the harness will create or amend the commit.
-7. If `defaults_mode: true`, prefer recommended defaults over `NEEDS_USER` unless blocked by missing credentials, safety, destructive operations, or impossibility.
-8. If the stage needs user input under the decision policy, write the stage output with `status: NEEDS_USER`.
-9. If the stage fails, write the stage output with `status: FAIL` and a concrete blocking reason.
-10. End with a concise summary; the harness will inspect files, not your final message.
+3. Write the human-readable stage output file exactly at `{rel(output)}`.
+4. Also write the machine-readable stage result JSON exactly at `{rel(result_json)}`.
+5. Do not run `git commit`, `git reset`, `git checkout`, `git rebase`, or `git push`. The local harness owns Git history.
+6. This Git ownership rule overrides any preset text that appears to ask the model to create, amend, or push commits.
+7. For commit stages, leave the working tree commit-ready and record commit intent in the stage output; the harness will create or amend the commit.
+8. If `defaults_mode: true`, prefer recommended defaults over `NEEDS_USER` unless blocked by missing credentials, safety, destructive operations, or impossibility.
+9. If the stage needs user input under the decision policy, write both outputs with `status: NEEDS_USER`.
+10. If the stage fails, write both outputs with `status: FAIL` and a concrete blocking reason.
+11. If `feature_name_locked: true`, keep the existing `feature_name` exactly as provided by the harness. Do not rename or invent a different feature slug.
+12. End with a concise summary; the harness will inspect files, not your final message.
+
+## Machine Result JSON Contract
+The harness reads `{rel(result_json)}` first. Keep the `## 단계 결과` section in `{rel(output)}` for humans, but write this JSON file for the harness.
+
+Required JSON keys:
+- status: "PASS", "FAIL", "SKIPPED", or "NEEDS_USER"
+- next_stage: next stage id or "done"
+- human_gate_required: true or false
+- blocking_reason: string, use "" when there is no blocker
+
+Include any extra stage fields that the preset asks for, such as `risk_level`, `harness_commit_required`, `changed_files`, `verification_summary`, or `fix_inputs`.
 
 ## Original User Request
 {state.get("request", "")}
@@ -801,6 +1355,9 @@ def generate_prompt(state: dict[str, Any], stage: str) -> Path:
 
 ## Additional Stage Inputs
 {chr(10).join(additional_inputs) if additional_inputs else "- none"}
+
+## Retry Context
+{retry_context if retry_context else "- none"}
 
 ## Current Git Hints
 - current_head: {safe_git_head()}
@@ -821,6 +1378,33 @@ def generate_prompt(state: dict[str, Any], stage: str) -> Path:
     return path
 
 
+def print_provider_heartbeat(
+    *,
+    stage: str,
+    provider: str,
+    started: float,
+    stdout_path: Path,
+    stderr_path: Path,
+    last_stdout_size: int,
+    last_stderr_size: int,
+) -> tuple[int, int]:
+    stdout_size = file_size(stdout_path)
+    stderr_size = file_size(stderr_path)
+    stdout_delta = stdout_size - last_stdout_size
+    stderr_delta = stderr_size - last_stderr_size
+    parts = [
+        color_text(f"[{datetime.now().strftime('%H:%M:%S')}]", "dim"),
+        color_text("[진행중]", "cyan", "bold"),
+        f"{color_text(provider, 'magenta', 'bold')} 실행 중",
+        f"stage={stage}",
+        f"elapsed={format_duration(time.time() - started)}",
+        f"stdout +{format_bytes(max(0, stdout_delta))}",
+        f"stderr +{format_bytes(max(0, stderr_delta))}",
+    ]
+    print(" | ".join(parts), flush=True)
+    return stdout_size, stderr_size
+
+
 def execute_current_prompt(state: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
     feature = state["feature_name"]
     stage = state["current_stage"]
@@ -832,19 +1416,27 @@ def execute_current_prompt(state: dict[str, Any], timeout_seconds: int) -> dict[
         raise HarnessError(f"Prompt file does not exist: {prompt_file}")
 
     provider = provider_for_stage(stage)
-    command = provider_command(provider)
-    executable = resolve_executable(command)
-    if not executable:
-        raise HarnessError(f"Provider executable not found for {provider}: {command[0]}")
-
+    prompt_text = prompt_file.read_text(encoding="utf-8")
     logs_dir = run_dir(feature) / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
     attempt = state.get("attempts", {}).get(stage, 1)
     stdout_path = logs_dir / f"{stage}_attempt{attempt}_{provider}.out.txt"
     stderr_path = logs_dir / f"{stage}_attempt{attempt}_{provider}.err.txt"
     meta_path = logs_dir / f"{stage}_attempt{attempt}_{provider}.json"
+    cli_log_path = logs_dir / f"{stage}_attempt{attempt}_{provider}.cli.log"
+    performance = normalize_performance(state.get("performance"))
 
-    prompt_text = prompt_file.read_text(encoding="utf-8")
+    command, prompt_in_command = prepare_provider_command(
+        provider,
+        prompt_text,
+        prompt_file=prompt_file.resolve(),
+        log_file=cli_log_path.resolve(),
+        performance=performance,
+    )
+    executable = resolve_executable(command)
+    if not executable:
+        raise HarnessError(f"Provider executable not found for {provider}: {command[0]}")
+
     before_head = safe_git_head()
     state["status"] = "model_running"
     log_event(
@@ -853,38 +1445,96 @@ def execute_current_prompt(state: dict[str, Any], timeout_seconds: int) -> dict[
         f"running {provider}",
         stage=stage,
         provider=provider,
+        performance=performance,
         timeout_seconds=timeout_seconds,
     )
     save_state(state)
 
     started = time.time()
-    proc = subprocess.run(
-        command,
-        cwd=ROOT,
-        input=prompt_text,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=timeout_seconds,
-        check=False,
-    )
+    stdout_path.write_text("", encoding="utf-8")
+    stderr_path.write_text("", encoding="utf-8")
+    with stdout_path.open("w", encoding="utf-8", errors="replace") as stdout_fh, stderr_path.open(
+        "w", encoding="utf-8", errors="replace"
+    ) as stderr_fh:
+        proc = subprocess.Popen(
+            command,
+            cwd=ROOT,
+            stdin=subprocess.PIPE,
+            stdout=stdout_fh,
+            stderr=stderr_fh,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if proc.stdin and not prompt_in_command:
+            proc.stdin.write(prompt_text)
+            proc.stdin.close()
+        elif proc.stdin:
+            proc.stdin.close()
+
+        last_heartbeat = started
+        last_stdout_size = 0
+        last_stderr_size = 0
+        while proc.poll() is None:
+            now = time.time()
+            if timeout_seconds > 0 and now - started > timeout_seconds:
+                proc.kill()
+                proc.wait()
+                elapsed = round(time.time() - started, 2)
+                state["status"] = "blocked"
+                state["blocked"] = {
+                    "stage": stage,
+                    "reason": (
+                        f"Provider {provider} timed out after {timeout_seconds} seconds. "
+                        f"See {rel(stderr_path)}"
+                    ),
+                }
+                write_handoff(
+                    state,
+                    str(state["blocked"]["reason"]),
+                    stage=stage,
+                    next_action="provider timeout 원인을 확인하고 retry로 현재 단계를 다시 실행하세요.",
+                )
+                log_event(
+                    state,
+                    "provider_failed",
+                    f"{provider} timed out",
+                    stage=stage,
+                    provider=provider,
+                    stderr=rel(stderr_path),
+                    elapsed_seconds=elapsed,
+                )
+                save_state(state)
+                return state
+            if now - last_heartbeat >= DEFAULT_PROVIDER_HEARTBEAT_SECONDS:
+                last_stdout_size, last_stderr_size = print_provider_heartbeat(
+                    stage=stage,
+                    provider=provider,
+                    started=started,
+                    stdout_path=stdout_path,
+                    stderr_path=stderr_path,
+                    last_stdout_size=last_stdout_size,
+                    last_stderr_size=last_stderr_size,
+                )
+                last_heartbeat = now
+            time.sleep(1)
+
     elapsed = round(time.time() - started, 2)
-    stdout_path.write_text(proc.stdout or "", encoding="utf-8")
-    stderr_path.write_text(proc.stderr or "", encoding="utf-8")
     after_head = safe_git_head()
     meta_path.write_text(
         json.dumps(
             {
                 "stage": stage,
                 "provider": provider,
-                "command": command,
+                "performance": performance,
+                "performance_settings": provider_performance_settings(provider, performance),
+                "command": redact_prompt_command(command, prompt_text),
                 "returncode": proc.returncode,
                 "before_head": before_head,
                 "after_head": after_head,
                 "stdout": rel(stdout_path),
                 "stderr": rel(stderr_path),
+                "provider_log": rel(cli_log_path),
                 "finished_at": iso_now(),
             },
             ensure_ascii=False,
@@ -900,6 +1550,12 @@ def execute_current_prompt(state: dict[str, Any], timeout_seconds: int) -> dict[
             "stage": stage,
             "reason": "Provider changed Git HEAD. The harness owns commits; inspect history before continuing.",
         }
+        write_handoff(
+            state,
+            str(state["blocked"]["reason"]),
+            stage=stage,
+            next_action="Git history를 점검한 뒤 수동으로 정리하고 resume 또는 retry 하세요.",
+        )
         log_event(
             state,
             "blocked_provider_changed_head",
@@ -917,6 +1573,12 @@ def execute_current_prompt(state: dict[str, Any], timeout_seconds: int) -> dict[
             "stage": stage,
             "reason": f"Provider {provider} exited with code {proc.returncode}. See {rel(stderr_path)}",
         }
+        write_handoff(
+            state,
+            str(state["blocked"]["reason"]),
+            stage=stage,
+            next_action="stderr 로그를 확인하고 retry로 현재 단계를 다시 실행하세요.",
+        )
         log_event(
             state,
             "provider_failed",
@@ -925,6 +1587,42 @@ def execute_current_prompt(state: dict[str, Any], timeout_seconds: int) -> dict[
             provider=provider,
             returncode=proc.returncode,
             stderr=rel(stderr_path),
+            elapsed_seconds=elapsed,
+        )
+        save_state(state)
+        return state
+
+    expected_output = stage_output_path(feature, stage)
+    expected_result_json = stage_result_json_path(feature, stage)
+    if (
+        not expected_output.exists()
+        and not expected_result_json.exists()
+        and file_size(stdout_path) == 0
+        and file_size(stderr_path) == 0
+    ):
+        state["status"] = "blocked"
+        state["blocked"] = {
+            "stage": stage,
+            "reason": (
+                f"Provider {provider} exited with code 0 but produced no stdout, no stderr, "
+                f"and no required outputs. This usually means the provider CLI did not execute the prompt. "
+                f"See {rel(cli_log_path)}."
+            ),
+            "next_stage": stage,
+        }
+        write_handoff(
+            state,
+            str(state["blocked"]["reason"]),
+            stage=stage,
+            next_action="provider_log를 확인하고 provider 설정 또는 인증 상태를 고친 뒤 retry 하세요.",
+        )
+        log_event(
+            state,
+            "provider_no_output",
+            f"{provider} exited without output",
+            stage=stage,
+            provider=provider,
+            provider_log=rel(cli_log_path),
             elapsed_seconds=elapsed,
         )
         save_state(state)
@@ -1280,8 +1978,17 @@ def commit_for_stage(state: dict[str, Any], stage: str, result: dict[str, Any]) 
     save_state(state)
 
 
-def create_run(request: str, feature: str | None, defaults_mode: bool = False) -> dict[str, Any]:
+def create_run(
+    request: str,
+    feature: str | None,
+    defaults_mode: bool = False,
+    performance: Any | None = None,
+) -> dict[str, Any]:
+    assert_no_unpushed_commits_for_new_run()
+    assert_no_incomplete_runs_for_new_run()
     ensure_dirs()
+    performance_name = normalize_performance(performance)
+    feature_name_locked = feature is not None
     if feature is None:
         feature = slugify(request)
     if not validate_slug(feature):
@@ -1292,8 +1999,10 @@ def create_run(request: str, feature: str | None, defaults_mode: bool = False) -
     feature_dir(feature).mkdir(parents=True, exist_ok=True)
     state = {
         "feature_name": feature,
+        "feature_name_locked": feature_name_locked,
         "request": request,
         "pipeline_mode": PIPELINE_MODE,
+        "performance": performance_name,
         "defaults_mode": defaults_mode,
         "current_stage": START_STAGE,
         "status": "created",
@@ -1312,23 +2021,306 @@ def create_run(request: str, feature: str | None, defaults_mode: bool = False) -
         "created feature run",
         request=request,
         feature=feature,
+        performance=performance_name,
         defaults_mode=defaults_mode,
     )
     generate_prompt(state, START_STAGE)
     return state
 
 
-def load_stage_result(feature: str, stage: str) -> tuple[Path, str, dict[str, Any]]:
+def apply_runtime_performance(state: dict[str, Any], performance: Any | None) -> dict[str, Any]:
+    if performance is None:
+        return state
+    performance_name = normalize_performance(performance)
+    previous = state.get("performance")
+    state["performance"] = performance_name
+    if previous != performance_name:
+        log_event(
+            state,
+            "performance_updated",
+            "performance profile updated",
+            performance=performance_name,
+            previous_performance=previous,
+        )
+    save_state(state)
+    return state
+
+
+def latest_provider_artifacts(
+    feature: str,
+    stage: str,
+    state: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    try:
+        provider = provider_for_stage(stage)
+    except Exception:
+        provider = "unknown"
+    attempt = 1
+    if state:
+        attempt = int(state.get("attempts", {}).get(stage, 1))
+    logs_dir = run_dir(feature) / "logs"
+    artifacts = {
+        "provider": provider,
+        "stdout": rel(logs_dir / f"{stage}_attempt{attempt}_{provider}.out.txt"),
+        "stderr": rel(logs_dir / f"{stage}_attempt{attempt}_{provider}.err.txt"),
+        "meta": rel(logs_dir / f"{stage}_attempt{attempt}_{provider}.json"),
+        "provider_log": rel(logs_dir / f"{stage}_attempt{attempt}_{provider}.cli.log"),
+    }
+    return artifacts
+
+
+def handoff_path(feature: str) -> Path:
+    return run_dir(feature) / "handoff.md"
+
+
+def safe_read_tail(path: Path, lines: int = 40, max_chars: int = 6000) -> str:
+    if not path.exists():
+        return ""
+    try:
+        content = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    text = "\n".join(content[-lines:])
+    if len(text) > max_chars:
+        return text[-max_chars:]
+    return text
+
+
+def latest_verification_summary(feature: str) -> dict[str, Any] | None:
+    path = latest_verification_result_path(feature)
+    if not path.exists():
+        return None
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def recent_events(state: dict[str, Any], limit: int = 8) -> list[dict[str, Any]]:
+    events = state.get("events", [])
+    if not isinstance(events, list):
+        return []
+    return [event for event in events[-limit:] if isinstance(event, dict)]
+
+
+def write_handoff(
+    state: dict[str, Any],
+    reason: str,
+    *,
+    stage: str | None = None,
+    next_action: str | None = None,
+    result: dict[str, Any] | None = None,
+) -> Path:
+    feature = state["feature_name"]
+    stage = stage or str(state.get("current_stage") or "")
+    path = handoff_path(feature)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    expected_md = stage_output_path(feature, stage) if stage in STAGES else None
+    expected_json = stage_result_json_path(feature, stage) if stage in STAGES else None
+    artifacts = latest_provider_artifacts(feature, stage, state) if stage in STAGES else {}
+    verification = latest_verification_summary(feature)
+
+    lines = [
+        "# 실패 인수인계",
+        "",
+        f"- feature: {feature}",
+        f"- pipeline_mode: {state.get('pipeline_mode') or PIPELINE_MODE}",
+        f"- stage: {stage or '-'}",
+        f"- status: {state.get('status') or '-'}",
+        f"- generated_at: {iso_now()}",
+        f"- reason: {reason}",
+    ]
+    if next_action:
+        lines.append(f"- next_action: {next_action}")
+    if expected_md:
+        lines.append(f"- expected_md: {rel(expected_md)}")
+    if expected_json:
+        lines.append(f"- expected_json: {rel(expected_json)}")
+    if state.get("current_prompt"):
+        lines.append(f"- current_prompt: {state['current_prompt']}")
+    if state.get("last_harness_verification"):
+        lines.append(f"- latest_harness_verification: {state['last_harness_verification']}")
+
+    lines.extend(["", "## 확인할 로그"])
+    if artifacts:
+        lines.extend(
+            [
+                f"- provider: {artifacts.get('provider')}",
+                f"- stdout: {artifacts.get('stdout')}",
+                f"- stderr: {artifacts.get('stderr')}",
+                f"- meta: {artifacts.get('meta')}",
+                f"- provider_log: {artifacts.get('provider_log')}",
+            ]
+        )
+    else:
+        lines.append("- provider log: 없음")
+
+    if result:
+        lines.extend(["", "## 단계 결과"])
+        lines.append("```json")
+        lines.append(json.dumps(result, ensure_ascii=False, indent=2))
+        lines.append("```")
+
+    if verification:
+        lines.extend(["", "## 최근 하네스 검증"])
+        lines.append("```json")
+        lines.append(
+            json.dumps(
+                {
+                    "status": verification.get("status"),
+                    "failed_commands": verification.get("failed_commands", []),
+                    "latest_path": verification.get("latest_path"),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        lines.append("```")
+
+    events = recent_events(state)
+    if events:
+        lines.extend(["", "## 최근 이벤트"])
+        for event in events:
+            lines.append(
+                f"- {event.get('at', '')} [{event.get('stage') or '-'}] "
+                f"{event.get('event')}: {event.get('message', '')}"
+            )
+
+    if artifacts:
+        stdout_tail = safe_read_tail(ROOT / artifacts["stdout"], lines=20)
+        stderr_tail = safe_read_tail(ROOT / artifacts["stderr"], lines=20)
+        provider_log_tail = safe_read_tail(ROOT / artifacts["provider_log"], lines=30)
+        if stdout_tail:
+            lines.extend(["", "## stdout 마지막 부분", "```text", stdout_tail, "```"])
+        if stderr_tail:
+            lines.extend(["", "## stderr 마지막 부분", "```text", stderr_tail, "```"])
+        if provider_log_tail:
+            lines.extend(["", "## provider log 마지막 부분", "```text", provider_log_tail, "```"])
+
+    lines.extend(
+        [
+            "",
+            "## 다음 모델에게",
+            "- 위 reason을 먼저 해결한다.",
+            "- 사람이 읽는 md 산출물과 하네스가 읽는 result.json을 둘 다 작성한다.",
+            "- Git 커밋은 하지 않는다. 하네스가 커밋을 소유한다.",
+        ]
+    )
+
+    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    state["last_handoff"] = rel(path)
+    return path
+
+
+def missing_stage_output_message(
+    feature: str,
+    stage: str,
+    output: Path,
+    state: dict[str, Any] | None = None,
+) -> str:
+    artifacts = latest_provider_artifacts(feature, stage, state)
+    provider = artifacts["provider"]
+    harness_script = ".ai\\harness_fast.py" if state and state.get("pipeline_mode") == "fast" else ".ai\\harness.py"
+    return "\n".join(
+        [
+            color_text("[실패] 필수 단계 산출물이 없습니다.", "red", "bold"),
+            "",
+            color_text("예상 파일:", "yellow", "bold"),
+            f"  {rel(output)}",
+            "",
+            color_text("무슨 일이 있었나:", "cyan", "bold"),
+            (
+                f"  {provider} provider는 종료됐지만, 하네스가 요구한 stage output 파일을 "
+                "현재 저장소 안에 만들지 않았습니다."
+            ),
+            "",
+            color_text("가능한 원인:", "yellow", "bold"),
+            "  1. provider가 다른 workspace를 작업 대상으로 잡았습니다.",
+            "  2. 모델이 필수 출력 경로 지시를 따르지 않았습니다.",
+            "  3. 파일 생성 권한 또는 경로 문제가 있었습니다.",
+            "",
+            color_text("확인할 로그:", "cyan", "bold"),
+            f"  stdout: {artifacts['stdout']}",
+            f"  stderr: {artifacts['stderr']}",
+            f"  meta:   {artifacts['meta']}",
+            f"  provider_log: {artifacts['provider_log']}",
+            "",
+            color_text("다음 조치:", "green", "bold"),
+            f"  python {harness_script} status {feature}",
+            f"  python {harness_script} log {feature} --lines 80",
+            "  필요하면 cleanup 후 같은 요청으로 다시 실행하세요.",
+        ]
+    )
+
+
+def load_stage_result(
+    feature: str,
+    stage: str,
+    state: dict[str, Any] | None = None,
+) -> tuple[Path, str, dict[str, Any]]:
     output = stage_output_path(feature, stage)
     if not output.exists():
-        raise HarnessError(
-            f"Missing stage output: {rel(output)}\n"
-            f"Run the prompt first, then resume. Prompt: {state_path(feature).parent / 'prompts'}"
-        )
+        if state is not None:
+            state["status"] = "blocked"
+            state["blocked"] = {
+                "stage": stage,
+                "reason": f"Missing stage output: {rel(output)}",
+                "next_stage": stage,
+            }
+            write_handoff(
+                state,
+                f"Missing stage output: {rel(output)}",
+                stage=stage,
+                next_action="retry 명령으로 현재 단계를 다시 실행하거나 provider 로그를 확인하세요.",
+            )
+            save_state(state)
+        raise HarnessError(missing_stage_output_message(feature, stage, output, state))
     text = output.read_text(encoding="utf-8")
-    result = find_stage_result(text)
+    result_json = stage_result_json_path(feature, stage)
+    if result_json.exists():
+        try:
+            result = read_stage_result_json(result_json)
+        except HarnessError as exc:
+            if state is not None:
+                state["status"] = "blocked"
+                state["blocked"] = {
+                    "stage": stage,
+                    "reason": str(exc),
+                    "next_stage": stage,
+                }
+                write_handoff(
+                    state,
+                    str(exc),
+                    stage=stage,
+                    next_action="result.json 형식을 고치거나 retry 명령으로 현재 단계를 다시 실행하세요.",
+                )
+                save_state(state)
+            raise
+    else:
+        result = find_stage_result(text)
     if not result:
-        raise HarnessError(f"Missing '## 단계 결과' block in {rel(output)}")
+        if state is not None:
+            state["status"] = "blocked"
+            state["blocked"] = {
+                "stage": stage,
+                "reason": (
+                    f"Missing stage result. Expected {rel(result_json)} or "
+                    f"'## 단계 결과' block in {rel(output)}"
+                ),
+                "next_stage": stage,
+            }
+            write_handoff(
+                state,
+                str(state["blocked"]["reason"]),
+                stage=stage,
+                next_action="result.json을 보강하거나 retry 명령으로 현재 단계를 다시 실행하세요.",
+            )
+            save_state(state)
+        raise HarnessError(
+            f"Missing stage result. Expected {rel(result_json)} or '## 단계 결과' block in {rel(output)}"
+        )
     return output, text, result
 
 
@@ -1382,6 +2374,12 @@ def validate_document_stage_artifacts(feature: str) -> str | None:
 def block_state(state: dict[str, Any], stage: str, reason: str, next_stage: str | None = None) -> None:
     state["status"] = "blocked"
     state["blocked"] = {"stage": stage, "reason": reason, "next_stage": next_stage}
+    write_handoff(
+        state,
+        reason,
+        stage=stage,
+        next_action="원인을 확인한 뒤 approve, retry, resume 중 맞는 명령으로 이어가세요.",
+    )
     log_event(state, "blocked", reason, stage=stage, next_stage=next_stage)
     save_state(state)
 
@@ -1394,11 +2392,11 @@ def resume_run(feature: str, max_verify_fix_retries: int = DEFAULT_MAX_VERIFY_FI
     if stage not in STAGES:
         raise HarnessError(f"Unknown current stage: {stage}")
 
-    output, text, result = load_stage_result(state["feature_name"], stage)
+    output, text, result = load_stage_result(state["feature_name"], stage, state)
     if stage == START_STAGE:
         state = maybe_rename_feature(state)
         feature = state["feature_name"]
-        output, text, result = load_stage_result(feature, stage)
+        output, text, result = load_stage_result(feature, stage, state)
 
     status = stage_status(result)
     next_stage = str(result.get("next_stage") or stage_default_next(stage) or "")
@@ -1469,6 +2467,13 @@ def resume_run(feature: str, max_verify_fix_retries: int = DEFAULT_MAX_VERIFY_FI
     commit_for_stage(state, stage, result)
 
     if stage == VERIFY_STAGE and status == "FAIL":
+        write_handoff(
+            state,
+            result.get("blocking_reason") or "Verify stage failed.",
+            stage=stage,
+            next_action=f"{VERIFY_RETRY_TARGET_STAGE} 단계가 이 실패를 수정해야 합니다.",
+            result=result,
+        )
         state["current_stage"] = VERIFY_RETRY_TARGET_STAGE
         state["status"] = "waiting_for_model"
         log_event(
@@ -1523,16 +2528,156 @@ def approve_run(feature: str, max_verify_fix_retries: int = DEFAULT_MAX_VERIFY_F
     return resume_run(state["feature_name"], max_verify_fix_retries=max_verify_fix_retries)
 
 
+def build_retry_context(state: dict[str, Any], stage: str) -> str:
+    feature = state["feature_name"]
+    blocked = state.get("blocked") if isinstance(state.get("blocked"), dict) else {}
+    reason = str(blocked.get("reason") or "Manual retry requested.")
+    handoff = write_handoff(
+        state,
+        reason,
+        stage=stage,
+        next_action="retry가 현재 단계를 보강 프롬프트로 다시 실행합니다.",
+    )
+    artifacts = latest_provider_artifacts(feature, stage, state)
+    output = stage_output_path(feature, stage)
+    result_json = stage_result_json_path(feature, stage)
+    parts = [
+        "This is a retry of the current stage. Fix the previous failure and overwrite both required outputs.",
+        "",
+        f"- retry_stage: {stage}",
+        f"- failure_reason: {reason}",
+        f"- handoff_file: {rel(handoff)}",
+        f"- required_md_output: {rel(output)}",
+        f"- required_result_json: {rel(result_json)}",
+        f"- provider_stdout: {artifacts['stdout']}",
+        f"- provider_stderr: {artifacts['stderr']}",
+        f"- provider_meta: {artifacts['meta']}",
+        "",
+        "Retry checklist:",
+        "1. Work in the repository root shown by the harness context.",
+        "2. Do not reuse stale stage results. Overwrite the md output and result.json for this stage.",
+        "3. If the prior failure was a missing output, create the exact paths above.",
+        "4. If verification failed, read the latest verification JSON and fix the failed commands.",
+        "5. Do not commit. The harness owns Git history.",
+    ]
+    verification = latest_verification_result_path(feature)
+    if verification.exists():
+        parts.append(f"- latest_harness_verification: {rel(verification)}")
+    handoff_tail = safe_read_tail(handoff, lines=80)
+    if handoff_tail:
+        parts.extend(["", "Latest handoff.md:", "```md", handoff_tail, "```"])
+    return "\n".join(parts)
+
+
+def copy_same_prompt_for_retry(state: dict[str, Any], stage: str) -> Path:
+    current_prompt = state.get("current_prompt")
+    if not current_prompt:
+        return generate_prompt(state, stage)
+    source = ROOT / current_prompt
+    if not source.exists():
+        return generate_prompt(state, stage)
+
+    state.setdefault("stage_file_snapshots", {})[stage] = file_policy_snapshot(state["feature_name"])
+    path = prompt_path(state, stage)
+    path.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    state["current_stage"] = stage
+    state["current_prompt"] = rel(path)
+    state["status"] = "waiting_for_model"
+    state.pop("blocked", None)
+    log_event(state, "retry_prompt_generated", "copied same prompt for retry", stage=stage, path=rel(path))
+    save_state(state)
+    return path
+
+
+def archive_stage_outputs_for_retry(state: dict[str, Any], stage: str) -> None:
+    feature = state["feature_name"]
+    archive_dir = run_dir(feature) / "retry_archives"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    attempt = int(state.get("attempts", {}).get(stage, 0) or 0)
+    stamp = now_stamp()
+    archived: list[str] = []
+    for path in [stage_output_path(feature, stage), stage_result_json_path(feature, stage)]:
+        if not path.exists():
+            continue
+        target = archive_dir / f"{stage}_attempt{attempt}_{stamp}_{path.name}"
+        shutil.copyfile(path, target)
+        path.unlink()
+        archived.append(rel(target))
+    if archived:
+        state.setdefault("retry_archives", []).append(
+            {"stage": stage, "at": iso_now(), "files": archived}
+        )
+        log_event(
+            state,
+            "retry_outputs_archived",
+            "archived stale stage outputs before retry",
+            stage=stage,
+            files=",".join(archived),
+        )
+
+
+def retry_run(
+    feature: str,
+    *,
+    same: bool,
+    prompt_only: bool,
+    auto: bool,
+    yes: bool,
+    defaults: bool,
+    timeout_seconds: int,
+    max_steps: int,
+    max_verify_fix_retries: int,
+) -> dict[str, Any]:
+    state = load_state(feature)
+    if defaults:
+        state["defaults_mode"] = True
+        log_event(state, "defaults_mode_enabled", "defaults mode enabled before retry")
+    blocked = state.get("blocked") if isinstance(state.get("blocked"), dict) else {}
+    stage = str(blocked.get("stage") or state.get("current_stage") or "")
+    if stage not in STAGES:
+        raise HarnessError(f"Cannot retry stage: {stage!r}")
+    if state.get("status") == "complete" or stage == "done":
+        raise HarnessError("Run is already complete; there is no current stage to retry.")
+
+    state["current_stage"] = stage
+    if same:
+        archive_stage_outputs_for_retry(state, stage)
+        copy_same_prompt_for_retry(state, stage)
+        state = load_state(feature)
+    else:
+        retry_context = build_retry_context(state, stage)
+        archive_stage_outputs_for_retry(state, stage)
+        state.pop("blocked", None)
+        generate_prompt(state, stage, retry_context=retry_context)
+        state = load_state(feature)
+        log_event(state, "retry_prompt_generated", "generated enriched retry prompt", stage=stage)
+        save_state(state)
+
+    if prompt_only:
+        return state
+
+    state = execute_current_prompt(state, timeout_seconds)
+    if state.get("status") == "blocked":
+        return state
+    state = resume_run(state["feature_name"], max_verify_fix_retries=max_verify_fix_retries)
+    if auto and state.get("status") not in {"complete", "blocked"}:
+        state = auto_drive(
+            state,
+            yes=yes,
+            timeout_seconds=timeout_seconds,
+            max_steps=max_steps,
+            max_verify_fix_retries=max_verify_fix_retries,
+        )
+    return state
+
+
 def print_status(feature: str | None) -> None:
     if feature:
         state = load_state(feature)
-        print(run_status_line(state))
-        if state.get("blocked"):
-            print("blocked:", json.dumps(state["blocked"], ensure_ascii=False))
-        print("commits:", json.dumps(state.get("commits", {}), ensure_ascii=False))
+        print_detailed_status(state)
         log_path = run_log_path(feature)
         if log_path.exists():
-            print(f"log: {log_path}")
+            print_status_field("로그", str(log_path), "cyan")
         return
     for path in sorted(RUNS_DIR.glob("*/run.json")):
         state = json.loads(path.read_text(encoding="utf-8"))
@@ -1582,6 +2727,131 @@ def print_log(feature: str, follow: bool = False, lines: int = 80) -> None:
             return
 
 
+def harness_script_for_state(state: dict[str, Any]) -> str:
+    return ".ai\\harness_fast.py" if state.get("pipeline_mode") == "fast" else ".ai\\harness.py"
+
+
+def explain_lines(state: dict[str, Any]) -> list[str]:
+    feature = state["feature_name"]
+    stage = str(state.get("current_stage") or "")
+    status = str(state.get("status") or "")
+    script = harness_script_for_state(state)
+    expected_md = stage_output_path(feature, stage) if stage in STAGES else None
+    expected_json = stage_result_json_path(feature, stage) if stage in STAGES else None
+    lines = [
+        f"feature: {feature}",
+        f"mode: {state.get('pipeline_mode') or PIPELINE_MODE}",
+        f"status: {status}",
+        f"stage: {stage or '-'}",
+    ]
+    if stage in STAGES:
+        try:
+            lines.append(f"provider: {provider_for_stage(stage)}")
+        except HarnessError:
+            lines.append("provider: -")
+    if state.get("current_prompt"):
+        lines.append(f"prompt: {state['current_prompt']}")
+    if expected_md:
+        lines.append(f"md_output: {rel(expected_md)} ({'exists' if expected_md.exists() else 'missing'})")
+    if expected_json:
+        lines.append(
+            f"result_json: {rel(expected_json)} ({'exists' if expected_json.exists() else 'missing'})"
+        )
+    if state.get("last_handoff"):
+        lines.append(f"handoff: {state['last_handoff']}")
+    if state.get("last_harness_verification"):
+        lines.append(f"latest_verification: {state['last_harness_verification']}")
+
+    lines.append("")
+    lines.append("판단:")
+    if status == "complete":
+        lines.append("- 이 run은 완료되었습니다.")
+    elif status == "blocked":
+        blocked = state.get("blocked", {})
+        reason = blocked.get("reason") if isinstance(blocked, dict) else None
+        lines.append(f"- 현재 막힌 이유: {reason or 'blocked 상세 정보 없음'}")
+        lines.append(f"- 실패 인수인계 파일을 확인하세요: {state.get('last_handoff') or rel(handoff_path(feature))}")
+        lines.append(f"- 재시도: python {script} retry {feature}")
+    elif expected_md and not expected_md.exists() and status in {"waiting_for_model", "model_completed"}:
+        lines.append("- 모델이 끝났거나 대기 중이지만 필수 md 산출물이 아직 없습니다.")
+        lines.append(f"- 재시도: python {script} retry {feature}")
+    elif status == "waiting_for_model":
+        lines.append("- 현재 프롬프트를 provider가 실행해야 하는 상태입니다.")
+        lines.append(f"- 자동 실행: python {script} auto {feature} --yes --defaults")
+        lines.append(f"- 프롬프트 확인: python {script} prompt {feature} --print")
+    elif status == "model_running":
+        lines.append("- provider 실행 중입니다. heartbeat와 provider 로그를 확인하세요.")
+        lines.append(f"- 감시: python {script} watch {feature}")
+    elif status == "model_completed":
+        lines.append("- provider 실행은 끝났고 하네스가 단계 결과를 반영해야 합니다.")
+        lines.append(f"- 재개: python {script} resume {feature}")
+    else:
+        lines.append("- 상태가 일반 흐름과 다릅니다. status와 log를 함께 확인하세요.")
+        lines.append(f"- 상태: python {script} status {feature}")
+
+    lines.append("")
+    lines.append("최근 이벤트:")
+    for event in recent_events(state, limit=5):
+        lines.append(
+            f"- {event.get('at', '')} [{event.get('stage') or '-'}] "
+            f"{event.get('event')}: {event.get('message', '')}"
+        )
+    if not recent_events(state, limit=1):
+        lines.append("- 없음")
+    return lines
+
+
+def print_explain(feature: str) -> None:
+    state = load_state(feature)
+    for line in explain_lines(state):
+        if line.startswith("판단:"):
+            print(color_text(line, "cyan", "bold"))
+        elif line.startswith("feature:"):
+            print(color_text(line, "bold"))
+        elif "retry" in line or "auto" in line or "resume" in line:
+            print(color_text(line, "green"))
+        else:
+            print(line)
+
+
+def print_watch_snapshot(feature: str, lines: int) -> dict[str, Any]:
+    state = load_state(feature)
+    stage = str(state.get("current_stage") or "-")
+    status = str(state.get("status") or "-")
+    attempt = state.get("attempts", {}).get(stage, "-") if stage in STAGES else "-"
+    print(
+        " | ".join(
+            [
+                color_text(datetime.now().strftime("%H:%M:%S"), "dim"),
+                color_text(feature, "bold"),
+                f"status={status_value(status)}",
+                f"stage={stage}",
+                f"attempt={attempt}",
+            ]
+        )
+    )
+    log_path = run_log_path(feature)
+    if log_path.exists():
+        for line in safe_read_tail(log_path, lines=lines).splitlines():
+            print(f"  {line}")
+    if state.get("last_handoff"):
+        print(color_text(f"  handoff: {state['last_handoff']}", "yellow"))
+    return state
+
+
+def watch_run(feature: str, interval_seconds: int, lines: int, exit_on_stop: bool = False) -> None:
+    if interval_seconds <= 0:
+        raise HarnessError("--interval must be greater than zero.")
+    try:
+        while True:
+            state = print_watch_snapshot(feature, lines)
+            if exit_on_stop and state.get("status") in {"complete", "blocked"}:
+                return
+            time.sleep(interval_seconds)
+    except KeyboardInterrupt:
+        return
+
+
 def cleanup_run(feature: str, keep_feature: bool = False) -> None:
     targets = [run_dir(feature)]
     if not keep_feature:
@@ -1597,7 +2867,75 @@ def cleanup_run(feature: str, keep_feature: bool = False) -> None:
         print(f"removed: {resolved}")
 
 
-def doctor() -> None:
+def doctor_provider_smoke(provider: str, timeout_seconds: int) -> None:
+    prompt = (
+        "You are running a harness doctor smoke test. "
+        "Do not edit files. Reply with exactly HARNESS_DOCTOR_OK."
+    )
+    ensure_dirs()
+    logs_dir = RUNS_DIR / "_doctor" / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    stamp = now_stamp()
+    stdout_path = logs_dir / f"{provider}_{stamp}.out.txt"
+    stderr_path = logs_dir / f"{provider}_{stamp}.err.txt"
+    cli_log_path = logs_dir / f"{provider}_{stamp}.cli.log"
+    command, prompt_in_command = prepare_provider_command(
+        provider,
+        prompt,
+        log_file=cli_log_path.resolve(),
+    )
+    executable = resolve_executable(command)
+    if not executable:
+        print(color_text(f"{provider}: missing executable", "red", "bold"))
+        return
+    before_paths = set(git_changed_paths())
+    started = time.time()
+    try:
+        proc = subprocess.run(
+            command,
+            cwd=ROOT,
+            input=None if prompt_in_command else prompt,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode("utf-8", errors="replace")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        stdout_path.write_text(str(stdout), encoding="utf-8")
+        stderr_path.write_text(str(stderr) + f"\nTimed out after {timeout_seconds} seconds.\n", encoding="utf-8")
+        print(
+            color_text(f"{provider}: timeout after {timeout_seconds}s", "red", "bold")
+            + f" stdout={rel(stdout_path)} stderr={rel(stderr_path)} provider_log={rel(cli_log_path)}"
+        )
+        return
+
+    elapsed = round(time.time() - started, 2)
+    stdout_path.write_text(proc.stdout or "", encoding="utf-8")
+    stderr_path.write_text(proc.stderr or "", encoding="utf-8")
+    after_paths = set(git_changed_paths())
+    new_changes = sorted(
+        path for path in after_paths - before_paths if not path.startswith(".ai/runs/_doctor/")
+    )
+    ok = proc.returncode == 0 and "HARNESS_DOCTOR_OK" in (proc.stdout or "")
+    style = ("green", "bold") if ok else ("red", "bold")
+    print(
+        color_text(f"{provider}: {'ok' if ok else 'failed'}", *style)
+        + f" returncode={proc.returncode} elapsed={elapsed}s stdout={rel(stdout_path)} stderr={rel(stderr_path)} provider_log={rel(cli_log_path)}"
+    )
+    if new_changes:
+        print(color_text(f"  warning: provider changed files: {', '.join(new_changes)}", "yellow", "bold"))
+
+
+def doctor(deep: bool = False, deep_timeout_seconds: int = DEFAULT_DOCTOR_DEEP_TIMEOUT_SECONDS) -> None:
     print(f"root: {ROOT}")
     try:
         print(f"git_head: {git_head()}")
@@ -1614,6 +2952,10 @@ def doctor() -> None:
     print("changed_paths:")
     for path in git_changed_paths():
         print(f"  {path}")
+    if deep:
+        print("deep provider smoke tests:")
+        for provider in ["codex", "claude", "agy"]:
+            doctor_provider_smoke(provider, deep_timeout_seconds)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1631,6 +2973,18 @@ def build_parser() -> argparse.ArgumentParser:
             ),
         )
 
+    def add_performance_arg(command: argparse.ArgumentParser) -> None:
+        command.add_argument(
+            "--performance",
+            choices=list(PERFORMANCE_PROFILES),
+            default=None,
+            help=(
+                "Performance profile for provider model settings. "
+                f"Defaults to {DEFAULT_PERFORMANCE}. "
+                "Applied to codex/claude only; agy is recorded but not passed to the CLI yet."
+            ),
+        )
+
     start = sub.add_parser("start", help="Start a new feature run and generate the 00 prompt.")
     start.add_argument("request", help="User request for the feature.")
     start.add_argument("--feature", help="Optional feature slug.")
@@ -1643,6 +2997,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     start.add_argument("--timeout", type=int, default=3600, help="Provider timeout in seconds.")
     start.add_argument("--max-steps", type=int, default=30, help="Maximum automatic stage transitions.")
+    add_performance_arg(start)
     add_retry_arg(start)
 
     run = sub.add_parser("run", help="Start a new feature run and execute it automatically.")
@@ -1656,6 +3011,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--timeout", type=int, default=3600, help="Provider timeout in seconds.")
     run.add_argument("--max-steps", type=int, default=30, help="Maximum automatic stage transitions.")
+    add_performance_arg(run)
     add_retry_arg(run)
 
     resume = sub.add_parser("resume", help="Resume the current stage after the model wrote its output.")
@@ -1664,6 +3020,7 @@ def build_parser() -> argparse.ArgumentParser:
     resume.add_argument("--yes", action="store_true", help="Auto-approve human gates while running with --auto.")
     resume.add_argument("--timeout", type=int, default=3600, help="Provider timeout in seconds.")
     resume.add_argument("--max-steps", type=int, default=30, help="Maximum automatic stage transitions.")
+    add_performance_arg(resume)
     add_retry_arg(resume)
 
     auto = sub.add_parser("auto", help="Execute the current and following stages with local providers.")
@@ -1676,6 +3033,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     auto.add_argument("--timeout", type=int, default=3600, help="Provider timeout in seconds.")
     auto.add_argument("--max-steps", type=int, default=30, help="Maximum automatic stage transitions.")
+    add_performance_arg(auto)
     add_retry_arg(auto)
 
     approve = sub.add_parser("approve", help="Approve a blocked human gate and continue.")
@@ -1689,6 +3047,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     approve.add_argument("--timeout", type=int, default=3600, help="Provider timeout in seconds.")
     approve.add_argument("--max-steps", type=int, default=30, help="Maximum automatic stage transitions.")
+    add_performance_arg(approve)
     add_retry_arg(approve)
 
     status = sub.add_parser("status", help="Show run status.")
@@ -1705,6 +3064,31 @@ def build_parser() -> argparse.ArgumentParser:
     log.add_argument("--follow", "-f", action="store_true", help="Follow the log.")
     log.add_argument("--lines", type=int, default=80, help="Number of trailing lines to print.")
 
+    watch = sub.add_parser("watch", help="Watch run status and recent log lines.")
+    watch.add_argument("feature", help="Feature slug.")
+    watch.add_argument("--interval", type=int, default=DEFAULT_WATCH_INTERVAL_SECONDS, help="Refresh interval in seconds.")
+    watch.add_argument("--lines", type=int, default=8, help="Number of recent log lines to print.")
+    watch.add_argument("--exit-on-stop", action="store_true", help="Exit when the run becomes complete or blocked.")
+
+    explain = sub.add_parser("explain", help="Explain why a run is stopped and what to do next.")
+    explain.add_argument("feature", help="Feature slug.")
+
+    retry = sub.add_parser("retry", help="Retry the current stage.")
+    retry.add_argument("feature", help="Feature slug.")
+    retry.add_argument("--same", action="store_true", help="Retry with the same prompt content instead of adding failure context.")
+    retry.add_argument("--prompt-only", action="store_true", help="Only generate the retry prompt; do not execute the provider.")
+    retry.add_argument("--auto", action="store_true", help="Continue executing following stages after this retry succeeds.")
+    retry.add_argument("--yes", action="store_true", help="Auto-approve human gates while continuing with --auto.")
+    retry.add_argument(
+        "--defaults",
+        action="store_true",
+        help="Switch this run to defaults mode before retrying.",
+    )
+    retry.add_argument("--timeout", type=int, default=3600, help="Provider timeout in seconds.")
+    retry.add_argument("--max-steps", type=int, default=30, help="Maximum automatic stage transitions after retry.")
+    add_performance_arg(retry)
+    add_retry_arg(retry)
+
     cleanup = sub.add_parser("cleanup", help="Remove a local run directory and optionally its feature dir.")
     cleanup.add_argument("feature", help="Feature slug.")
     cleanup.add_argument(
@@ -1713,7 +3097,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Only remove .ai/runs/<feature>, preserving .ai/features/<feature>.",
     )
 
-    sub.add_parser("doctor", help="Check local harness prerequisites.")
+    doctor_parser = sub.add_parser("doctor", help="Check local harness prerequisites.")
+    doctor_parser.add_argument("--deep", action="store_true", help="Run provider smoke tests, not just path checks.")
+    doctor_parser.add_argument(
+        "--deep-timeout",
+        type=int,
+        default=DEFAULT_DOCTOR_DEEP_TIMEOUT_SECONDS,
+        help="Timeout in seconds for each --deep provider smoke test.",
+    )
     return parser
 
 
@@ -1722,7 +3113,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "start":
-            state = create_run(args.request, args.feature, defaults_mode=args.defaults)
+            state = create_run(
+                args.request,
+                args.feature,
+                defaults_mode=args.defaults,
+                performance=args.performance,
+            )
             if args.auto:
                 state = auto_drive(
                     state,
@@ -1736,7 +3132,12 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"prompt: {ROOT / state['current_prompt']}")
             return 0
         if args.command == "run":
-            state = create_run(args.request, args.feature, defaults_mode=args.defaults)
+            state = create_run(
+                args.request,
+                args.feature,
+                defaults_mode=args.defaults,
+                performance=args.performance,
+            )
             state = auto_drive(
                 state,
                 yes=args.yes,
@@ -1749,8 +3150,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"prompt: {ROOT / state['current_prompt']}")
             return 0
         if args.command == "resume":
+            state = apply_runtime_performance(load_state(args.feature), args.performance)
             if args.auto:
-                state = load_state(args.feature)
                 state = auto_drive(
                     state,
                     yes=args.yes,
@@ -1765,7 +3166,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"prompt: {ROOT / state['current_prompt']}")
             return 0
         if args.command == "auto":
-            state = load_state(args.feature)
+            state = apply_runtime_performance(load_state(args.feature), args.performance)
             if args.defaults:
                 state["defaults_mode"] = True
                 log_event(state, "defaults_mode_enabled", "defaults mode enabled for existing run")
@@ -1782,6 +3183,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"prompt: {ROOT / state['current_prompt']}")
             return 0
         if args.command == "approve":
+            apply_runtime_performance(load_state(args.feature), args.performance)
             state = approve_run(args.feature, max_verify_fix_retries=args.max_verify_fix_retries)
             if args.defaults:
                 state["defaults_mode"] = True
@@ -1811,16 +3213,44 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "log":
             print_log(args.feature, follow=args.follow, lines=args.lines)
             return 0
+        if args.command == "watch":
+            watch_run(
+                args.feature,
+                interval_seconds=args.interval,
+                lines=args.lines,
+                exit_on_stop=args.exit_on_stop,
+            )
+            return 0
+        if args.command == "explain":
+            print_explain(args.feature)
+            return 0
+        if args.command == "retry":
+            apply_runtime_performance(load_state(args.feature), args.performance)
+            state = retry_run(
+                args.feature,
+                same=args.same,
+                prompt_only=args.prompt_only,
+                auto=args.auto,
+                yes=args.yes,
+                defaults=args.defaults,
+                timeout_seconds=args.timeout,
+                max_steps=args.max_steps,
+                max_verify_fix_retries=args.max_verify_fix_retries,
+            )
+            print(run_status_line(state))
+            if state.get("current_prompt"):
+                print(f"prompt: {ROOT / state['current_prompt']}")
+            return 0
         if args.command == "cleanup":
             cleanup_run(args.feature, keep_feature=args.keep_feature)
             return 0
         if args.command == "doctor":
-            doctor()
+            doctor(deep=args.deep, deep_timeout_seconds=args.deep_timeout)
             return 0
         parser.error("Unknown command")
         return 2
     except HarnessError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+        print(f"{color_text('ERROR:', 'red', 'bold')} {exc}", file=sys.stderr)
         return 1
     except subprocess.CalledProcessError as exc:
         print("ERROR: command failed", file=sys.stderr)
