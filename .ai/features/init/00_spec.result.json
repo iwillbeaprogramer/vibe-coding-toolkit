@@ -1,0 +1,46 @@
+{
+  "status": "PASS",
+  "next_stage": "01_plan",
+  "human_gate_required": true,
+  "blocking_reason": "",
+  "risk_level": "high",
+  "harness_commit_required": false,
+  "produced_files": [
+    ".ai/features/init/00_spec.md",
+    ".ai/features/init/00_spec.result.json"
+  ],
+  "changed_files": [
+    ".ai/features/init/00_spec.md",
+    ".ai/features/init/00_spec.result.json"
+  ],
+  "verification_summary": "기존 WPF 프로젝트 구조와 빈 MainWindow를 확인했고, 구현 파일은 수정하지 않았다. 스펙 및 하네스 결과 JSON만 작성했다.",
+  "fix_inputs": [],
+  "commit_created": false,
+  "commit_message": "",
+  "model_mismatch": false,
+  "actual_model": "Codex",
+  "history_notes": {
+    "implemented": [
+      "WPF 프론트엔드와 Python FastAPI 백엔드로 주식/ETF 정보를 조회하는 기능 스펙을 확정했다.",
+      "검색 입력, 백엔드 API, 요약 지표, 차트 데이터, 오류 처리, 제외 범위를 정의했다."
+    ],
+    "risks": [
+      "yfinance는 비공식 데이터 공급원이므로 응답 누락이나 장애 가능성이 있다.",
+      "WPF 차트 라이브러리와 Python 백엔드 의존성 추가가 필요할 수 있다.",
+      "실시간 시세나 유료 데이터 수준의 정확도는 이번 범위에 포함되지 않는다."
+    ],
+    "future_improvements": [
+      "실시간 스트리밍 시세를 별도 데이터 공급원으로 확장한다.",
+      "캔들 차트, 보조지표, 관심종목, 포트폴리오 기능을 후속 기능으로 추가한다.",
+      "배포 패키징과 백엔드 자동 실행 방식을 별도 단계에서 설계한다."
+    ],
+    "decisions": [
+      "feature_name_locked 정책에 따라 기능명은 init으로 유지했다.",
+      "기본 조회 대상은 QLD 같은 미국 상장 주식/ETF 티커로 정했다.",
+      "데이터 공급원은 API 키 없이 시작 가능한 yfinance로 정했다.",
+      "첫 차트는 종가 라인 차트를 기본으로 하되 백엔드는 OHLCV 데이터를 반환하도록 정했다.",
+      "FastAPI 기본 개발 주소는 http://127.0.0.1:8000으로 정했다."
+    ],
+    "unresolved_items": []
+  }
+}
