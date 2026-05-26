@@ -1,0 +1,62 @@
+{
+  "status": "PASS",
+  "next_stage": "06_document",
+  "human_gate_required": false,
+  "blocking_reason": "",
+  "risk_level": "low",
+  "harness_commit_required": true,
+  "commit_created_by_model": false,
+  "commit_message_suggestion": "init[20260526-212939][05_verify]",
+  "verify_target_commit": "179d81e9962f2c4ecb6e18b7e60b8b16cb607c5f",
+  "test_changes_ready_for_harness_commit": false,
+  "changed_files": [
+    ".ai/features/init/05_verify.md",
+    ".ai/features/init/05_verify.result.json"
+  ],
+  "produced_files": [
+    ".ai/features/init/05_verify.md",
+    ".ai/features/init/05_verify.result.json"
+  ],
+  "verification_summary": "모델이 직접 실행한 백엔드 pytest 13개, 전체 pytest 13개, WPF dotnet build, 하네스 py_compile, git diff --check가 모두 통과했다. 하네스 최종 검증 결과 파일은 모델 실행 시점에 아직 생성되지 않았으며, 최종 자동 판정은 하네스 실행 결과가 우선한다.",
+  "test_commands": [
+    "python -m pytest tests/test_api.py -v",
+    "python -m pytest -v",
+    "dotnet build src/stock-dashboard/stock-dashboard.sln -c Debug",
+    "python -m py_compile .ai\\harness.py .ai\\harness_fast.py .ai\\harness_standard.py .ai\\templates\\docx_helper.py",
+    "git -c safe.directory=D:/WorkingDirectories/vibe-test/vibe-coding-toolkit diff --check"
+  ],
+  "fix_inputs": {
+    "status": "NONE",
+    "items": [],
+    "reproduction_commands": [],
+    "added_test_files": [],
+    "related_files": [],
+    "expected_behavior": "모든 검증 통과",
+    "actual_behavior": "모든 모델 실행 검증 통과"
+  },
+  "history_notes": {
+    "implemented": [
+      "FastAPI 백엔드의 health, summary, history API가 테스트로 검증되었다.",
+      "WPF 프로젝트가 net7.0-windows 대상으로 경고 0개, 오류 0개로 빌드되었다.",
+      "03_review.md의 should_consider 및 optional 항목이 04_fix.md에서 모두 수용 처리되었고 MainWindow.xaml.cs 구현에 반영되어 있음을 확인했다."
+    ],
+    "risks": [
+      "실시간 yfinance 네트워크 호출은 자동 검증에서 mock 기반 테스트로 대체되어 외부 공급자 장애와 응답 형식 변경 위험은 운영 잔여 리스크로 남는다.",
+      "WPF UI 렌더링과 실제 사용자 조작은 빌드 검증까지만 수행했고 자동 UI 테스트는 없다."
+    ],
+    "future_improvements": [
+      "WPF UI 자동화 테스트를 도입해 검색 입력, 로딩 상태, 오류 메시지, 차트 렌더링을 회귀 검증한다.",
+      "API 기본 URL과 타임아웃을 외부 설정 파일로 분리한다.",
+      "운영 사용 전 yfinance 응답 캐시와 공급자 장애 완화 전략을 추가한다."
+    ],
+    "decisions": [
+      "검증 단계에서는 프로덕션 코드와 기존 테스트를 수정하지 않고 기존 테스트와 빌드, 하네스 명령 실행으로 판정했다.",
+      "추가 테스트는 작성하지 않았다. 현재 백엔드 오류 경로 테스트가 존재하고 WPF 변경은 빌드로 확인 가능한 범위였기 때문이다.",
+      "하네스 검증 명령과 모델 직접 실행 명령이 일부 다르므로, 하네스 명령은 별도 항목으로 기록하고 최종 판정권은 하네스에 둔다."
+    ],
+    "unresolved_items": []
+  },
+  "model_mismatch": false,
+  "actual_model": "Codex",
+  "harness_final_authority": true
+}
