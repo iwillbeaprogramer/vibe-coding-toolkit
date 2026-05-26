@@ -1,0 +1,93 @@
+{
+  "status": "PASS",
+  "next_stage": "06_document",
+  "human_gate_required": false,
+  "blocking_reason": "",
+  "risk_level": "low",
+  "harness_commit_required": true,
+  "commit_created_by_model": false,
+  "commit_message_suggestion": "initial-project[20260526-231355][05_verify]",
+  "verify_target_commit": "7e5d1258890bbe1c259e0ac9e66a24bb0cc54781",
+  "test_changes_ready_for_harness_commit": true,
+  "harness_final_authority": true,
+  "produced_files": [
+    ".ai/features/initial-project/05_verify.md",
+    ".ai/features/initial-project/05_verify.result.json"
+  ],
+  "changed_files": [
+    ".ai/features/initial-project/05_verify.md",
+    ".ai/features/initial-project/05_verify.result.json"
+  ],
+  "verification_summary": {
+    "decision_consistency": "PASS",
+    "dev_review_fix_consistency": "PASS",
+    "documentation_consistency": "PASS",
+    "backend_tests": "PASS: 16 passed, 1 warning",
+    "frontend_tests": "PASS: 16 passed with temporary .NET 8.0.100 SDK",
+    "solution_build": "PASS: 0 warnings, 0 errors",
+    "harness_commands_model_run": "PASS: harness_python_compile and git_diff_check"
+  },
+  "fix_inputs": {
+    "status": "NONE",
+    "items": [],
+    "reproduction_commands": [],
+    "verify_added_tests": [],
+    "related_files": [],
+    "expected_behavior": "",
+    "actual_behavior": ""
+  },
+  "test_commands": [
+    {
+      "command": "python -m pytest tests/backend -q",
+      "status": "PASS",
+      "summary": "16 passed, 1 warning"
+    },
+    {
+      "command": "dotnet test tests/frontend/StockDashboard.Tests/StockDashboard.Tests.csproj",
+      "status": "FAIL_ENV",
+      "summary": "Local default SDK is 7.0.401 and cannot target net8.0-windows (NETSDK1045)."
+    },
+    {
+      "command": "%TEMP%\\dotnet-sdk-8-100-codex\\dotnet.exe test tests/frontend/StockDashboard.Tests/StockDashboard.Tests.csproj",
+      "status": "PASS",
+      "summary": "16 passed"
+    },
+    {
+      "command": "%TEMP%\\dotnet-sdk-8-100-codex\\dotnet.exe build src/StockDashboard/StockDashboard.sln --no-restore",
+      "status": "PASS",
+      "summary": "0 warnings, 0 errors"
+    },
+    {
+      "command": "python -m py_compile .ai\\harness.py .ai\\harness_fast.py .ai\\harness_standard.py .ai\\templates\\docx_helper.py",
+      "status": "PASS",
+      "summary": "Harness Python files compiled successfully."
+    },
+    {
+      "command": "git -c safe.directory=D:/WorkingDirectories/vibe-test/vibe-coding-toolkit diff --check",
+      "status": "PASS",
+      "summary": "No whitespace errors."
+    }
+  ],
+  "history_notes": {
+    "implemented": [
+      "FastAPI backend exposes stock detail, metrics, profile, chart data, health endpoint, and structured error responses.",
+      "WPF client implements ticker search, validation, async API calls, error handling, and LiveCharts2 chart rendering.",
+      "04_fix addressed chart refresh desync, user cancellation handling, and upstream yfinance timeout protection."
+    ],
+    "risks": [
+      "Live yfinance data remains externally dependent and can be rate-limited or temporarily unavailable.",
+      "Default machine dotnet SDK is 7.0.401, so net8.0-windows frontend verification requires .NET 8 SDK."
+    ],
+    "future_improvements": [
+      "Consider caching or alternate providers for upstream finance data resilience.",
+      "Clean up the unused `ex` variable in `StockApiClient.cs` during a future production-code change window."
+    ],
+    "decisions": [
+      "No new 05_verify tests were added because 04_fix already added targeted regression coverage and all test suites passed.",
+      "Temporary .NET 8.0.100 SDK was installed outside the repository under `%TEMP%` to verify the WPF test project without modifying production code."
+    ],
+    "unresolved_items": []
+  },
+  "model_mismatch": false,
+  "actual_model": "Codex"
+}
