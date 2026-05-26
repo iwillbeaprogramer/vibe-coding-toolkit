@@ -24,6 +24,13 @@ default_next_stage: "02_review"
 
 # Standard Develop 프리셋 (1단계)
 
+## 경로 원칙
+
+- 프로덕션 코드는 루트 `src/` 하위 파일만 의미한다.
+- 테스트 코드는 루트 `tests/` 하위 파일만 의미한다.
+- 새 테스트 파일은 `tests/` 하위에만 만든다. `src/` 하위에 테스트 파일을 만들지 않는다.
+- `vendor/`, `packages/`, `dist/`, `build/` 등 외부/생성 산출물 디렉터리는 계획/수정/검증 대상에서 제외하고, 필요하면 생성물 또는 외부 산출물로만 기록한다.
+
 ## 실행 정책
 
 - 권장 담당 모델은 Claude이다.
@@ -81,8 +88,8 @@ default_next_stage: "02_review"
 - 확인 방법:
 
 ## 변경 파일
-- path/to/file.py: 변경 내용
-- path/to/test_file.py: 테스트 내용
+- src/path/to/file.py: 변경 내용
+- tests/path/to/test_file.py: 테스트 내용
 
 ## 계획과 달라진 점
 - 없음

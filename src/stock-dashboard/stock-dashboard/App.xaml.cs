@@ -6,7 +6,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 
-namespace stocks_dashboard
+namespace stock_dashboard
 {
     /// <summary>
     /// Interaction logic for App.xaml

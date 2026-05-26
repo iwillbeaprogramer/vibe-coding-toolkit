@@ -1,0 +1,243 @@
+{
+    "schema_version": 1,
+    "risks": [
+        {
+            "risk_id": "risk-068da5084555",
+            "제목": "실시간 yfinance 네트워크 호출은 자동 검증에서 mock 기반 테스트로 대체되어 외부 공급자 장애와 응답 형식 변경 위험은 운영 잔여 리스크로 남는다.",
+            "설명": "실시간 yfinance 네트워크 호출은 자동 검증에서 mock 기반 테스트로 대체되어 외부 공급자 장애와 응답 형식 변경 위험은 운영 잔여 리스크로 남는다.",
+            "title": "실시간 yfinance 네트워크 호출은 자동 검증에서 mock 기반 테스트로 대체되어 외부 공급자 장애와 응답 형식 변경 위험은 운영 잔여 리스크로 남는다.",
+            "category": "risk",
+            "severity": "low",
+            "status": "open",
+            "introduced_by": "init",
+            "last_seen_by": "20260526210731-init-full",
+            "source_stage": "05_verify",
+            "source_artifacts": [
+                ".ai/features/init/05_verify.md"
+            ],
+            "created_at": "2026-05-26T21:33:12",
+            "updated_at": "2026-05-26T21:33:12"
+        },
+        {
+            "risk_id": "risk-0f2c420e2057",
+            "제목": "WPF 차트는 종가 라인만 그리므로 거래 시간대/거래량 컨텍스트가 부족할 수 있다.",
+            "설명": "WPF 차트는 종가 라인만 그리므로 거래 시간대/거래량 컨텍스트가 부족할 수 있다.",
+            "title": "WPF 차트는 종가 라인만 그리므로 거래 시간대/거래량 컨텍스트가 부족할 수 있다.",
+            "category": "risk",
+            "severity": "low",
+            "status": "open",
+            "introduced_by": "init",
+            "last_seen_by": "20260526210731-init-full",
+            "source_stage": "02_develop",
+            "source_artifacts": [
+                ".ai/features/init/02_dev.md"
+            ],
+            "created_at": "2026-05-26T21:33:12",
+            "updated_at": "2026-05-26T21:33:12"
+        },
+        {
+            "risk_id": "risk-127404bbbb75",
+            "제목": "yfinance는 비공식 데이터 공급원이므로 응답 누락이나 장애 가능성이 있다.",
+            "설명": "yfinance는 비공식 데이터 공급원이므로 응답 누락이나 장애 가능성이 있다.",
+            "title": "yfinance는 비공식 데이터 공급원이므로 응답 누락이나 장애 가능성이 있다.",
+            "category": "risk",
+            "severity": "low",
+            "status": "open",
+            "introduced_by": "init",
+            "last_seen_by": "20260526210731-init-full",
+            "source_stage": "00_specify",
+            "source_artifacts": [
+                ".ai/features/init/00_spec.md"
+            ],
+            "created_at": "2026-05-26T21:33:12",
+            "updated_at": "2026-05-26T21:33:12"
+        },
+        {
+            "risk_id": "risk-204ef15e98ed",
+            "제목": "WPF 차트 라이브러리와 Python 백엔드 의존성 추가가 필요할 수 있다.",
+            "설명": "WPF 차트 라이브러리와 Python 백엔드 의존성 추가가 필요할 수 있다.",
+            "title": "WPF 차트 라이브러리와 Python 백엔드 의존성 추가가 필요할 수 있다.",
+            "category": "risk",
+            "severity": "low",
+            "status": "open",
+            "introduced_by": "init",
+            "last_seen_by": "20260526210731-init-full",
+            "source_stage": "00_specify",
+            "source_artifacts": [
+                ".ai/features/init/00_spec.md"
+            ],
+            "created_at": "2026-05-26T21:33:12",
+            "updated_at": "2026-05-26T21:33:12"
+        },
+        {
+            "risk_id": "risk-41453ef815de",
+            "제목": "DispatcherTimer 30ms 디바운스는 일반적인 드래그 리사이즈에 충분하나, 매우 빠른 자동화 리사이즈 시나리오에서는 마지막 프레임 지연이 체감될 수 있음",
+            "설명": "DispatcherTimer 30ms 디바운스는 일반적인 드래그 리사이즈에 충분하나, 매우 빠른 자동화 리사이즈 시나리오에서는 마지막 프레임 지연이 체감될 수 있음",
+            "title": "DispatcherTimer 30ms 디바운스는 일반적인 드래그 리사이즈에 충분하나, 매우 빠른 자동화 리사이즈 시나리오에서는 마지막 프레임 지연이 체감될 수 있음",
+            "category": "risk",
+            "severity": "low",
+            "status": "open",
+            "introduced_by": "init",
+            "last_seen_by": "20260526210731-init-full",
+            "source_stage": "04_fix",
+            "source_artifacts": [
+                ".ai/features/init/04_fix.md"
+            ],
+            "created_at": "2026-05-26T21:33:12",
+            "updated_at": "2026-05-26T21:33:12"
+        },
+        {
+            "risk_id": "risk-4d96c6176566",
+            "제목": "src/stocks-dashboard/(복수형) 구 디렉터리 삭제와 src/stock-dashboard/(단수형) 신규 디렉터리 추가가 동일 커밋에 포함되어 솔루션 경로 의존 외부 설정이 있을 경우 영향을 받을 수 있음",
+            "설명": "src/stocks-dashboard/(복수형) 구 디렉터리 삭제와 src/stock-dashboard/(단수형) 신규 디렉터리 추가가 동일 커밋에 포함되어 솔루션 경로 의존 외부 설정이 있을 경우 영향을 받을 수 있음",
+            "title": "src/stocks-dashboard/(복수형) 구 디렉터리 삭제와 src/stock-dashboard/(단수형) 신규 디렉터리 추가가 동일 커밋에 포함되어 솔루션 경로 의존 외부 설정이 있을 경우 영향을 받을 수 있음",
+            "category": "risk",
+            "severity": "low",
+            "status": "open",
+            "introduced_by": "init",
+            "last_seen_by": "20260526210731-init-full",
+            "source_stage": "04_fix",
+            "source_artifacts": [
+                ".ai/features/init/04_fix.md"
+            ],
+            "created_at": "2026-05-26T21:33:12",
+            "updated_at": "2026-05-26T21:33:12"
+        },
+        {
+            "risk_id": "risk-5ed8ad52e689",
+            "제목": "WPF 창 리사이즈 시 잦은 SizeChanged로 인한 일시적 오버헤드",
+            "설명": "WPF 창 리사이즈 시 잦은 SizeChanged로 인한 일시적 오버헤드",
+            "title": "WPF 창 리사이즈 시 잦은 SizeChanged로 인한 일시적 오버헤드",
+            "category": "risk",
+            "severity": "low",
+            "status": "open",
+            "introduced_by": "init",
+            "last_seen_by": "20260526210731-init-full",
+            "source_stage": "03_review",
+            "source_artifacts": [
+                ".ai/features/init/03_review.md"
+            ],
+            "created_at": "2026-05-26T21:33:12",
+            "updated_at": "2026-05-26T21:33:12"
+        },
+        {
+            "risk_id": "risk-6147f3e5e5ca",
+            "제목": "WPF UI 렌더링과 실제 사용자 조작은 빌드 검증까지만 수행했고 자동 UI 테스트는 없다.",
+            "설명": "WPF UI 렌더링과 실제 사용자 조작은 빌드 검증까지만 수행했고 자동 UI 테스트는 없다.",
+            "title": "WPF UI 렌더링과 실제 사용자 조작은 빌드 검증까지만 수행했고 자동 UI 테스트는 없다.",
+            "category": "risk",
+            "severity": "low",
+            "status": "open",
+            "introduced_by": "init",
+            "last_seen_by": "20260526210731-init-full",
+            "source_stage": "05_verify",
+            "source_artifacts": [
+                ".ai/features/init/05_verify.md"
+            ],
+            "created_at": "2026-05-26T21:33:12",
+            "updated_at": "2026-05-26T21:33:12"
+        },
+        {
+            "risk_id": "risk-666ea012cf82",
+            "제목": "백엔드 자동 기동 로직이 없어서 사용자가 별도로 uvicorn을 실행해야 한다.",
+            "설명": "백엔드 자동 기동 로직이 없어서 사용자가 별도로 uvicorn을 실행해야 한다.",
+            "title": "백엔드 자동 기동 로직이 없어서 사용자가 별도로 uvicorn을 실행해야 한다.",
+            "category": "risk",
+            "severity": "low",
+            "status": "open",
+            "introduced_by": "init",
+            "last_seen_by": "20260526210731-init-full",
+            "source_stage": "02_develop",
+            "source_artifacts": [
+                ".ai/features/init/02_dev.md"
+            ],
+            "created_at": "2026-05-26T21:33:12",
+            "updated_at": "2026-05-26T21:33:12"
+        },
+        {
+            "risk_id": "risk-8b92353badcd",
+            "제목": "yfinance의 비공식 API 특성상 특정 필드가 예기치 않게 누락되거나 API 점검 시 데이터 요청이 거부될 수 있는 리스크",
+            "설명": "yfinance의 비공식 API 특성상 특정 필드가 예기치 않게 누락되거나 API 점검 시 데이터 요청이 거부될 수 있는 리스크",
+            "title": "yfinance의 비공식 API 특성상 특정 필드가 예기치 않게 누락되거나 API 점검 시 데이터 요청이 거부될 수 있는 리스크",
+            "category": "risk",
+            "severity": "low",
+            "status": "open",
+            "introduced_by": "init",
+            "last_seen_by": "20260526210731-init-full",
+            "source_stage": "01_plan",
+            "source_artifacts": [
+                ".ai/features/init/01_plan.md"
+            ],
+            "created_at": "2026-05-26T21:33:12",
+            "updated_at": "2026-05-26T21:33:12"
+        },
+        {
+            "risk_id": "risk-9e83bb444ab6",
+            "제목": "yfinance의 비공식 API로 인한 Rate Limit 및 레이아웃 변경 취약점 (추후 Redis 캐시 도입 제안)",
+            "설명": "yfinance의 비공식 API로 인한 Rate Limit 및 레이아웃 변경 취약점 (추후 Redis 캐시 도입 제안)",
+            "title": "yfinance의 비공식 API로 인한 Rate Limit 및 레이아웃 변경 취약점 (추후 Redis 캐시 도입 제안)",
+            "category": "risk",
+            "severity": "low",
+            "status": "open",
+            "introduced_by": "init",
+            "last_seen_by": "20260526210731-init-full",
+            "source_stage": "06_document",
+            "source_artifacts": [
+                ".ai/features/init/06_document.md"
+            ],
+            "created_at": "2026-05-26T21:33:12",
+            "updated_at": "2026-05-26T21:33:12"
+        },
+        {
+            "risk_id": "risk-b78cd7d14983",
+            "제목": "yfinance 라이브러리 레이트 리밋 또는 포맷 변동 리스크 존재",
+            "설명": "yfinance 라이브러리 레이트 리밋 또는 포맷 변동 리스크 존재",
+            "title": "yfinance 라이브러리 레이트 리밋 또는 포맷 변동 리스크 존재",
+            "category": "risk",
+            "severity": "low",
+            "status": "open",
+            "introduced_by": "init",
+            "last_seen_by": "20260526210731-init-full",
+            "source_stage": "03_review",
+            "source_artifacts": [
+                ".ai/features/init/03_review.md"
+            ],
+            "created_at": "2026-05-26T21:33:12",
+            "updated_at": "2026-05-26T21:33:12"
+        },
+        {
+            "risk_id": "risk-c6799db19d04",
+            "제목": "yfinance가 비공식 스크래퍼 기반이라 운영 환경에서 레이트 리밋이나 응답 포맷 변경이 발생할 수 있다.",
+            "설명": "yfinance가 비공식 스크래퍼 기반이라 운영 환경에서 레이트 리밋이나 응답 포맷 변경이 발생할 수 있다.",
+            "title": "yfinance가 비공식 스크래퍼 기반이라 운영 환경에서 레이트 리밋이나 응답 포맷 변경이 발생할 수 있다.",
+            "category": "risk",
+            "severity": "low",
+            "status": "open",
+            "introduced_by": "init",
+            "last_seen_by": "20260526210731-init-full",
+            "source_stage": "02_develop",
+            "source_artifacts": [
+                ".ai/features/init/02_dev.md"
+            ],
+            "created_at": "2026-05-26T21:33:12",
+            "updated_at": "2026-05-26T21:33:12"
+        },
+        {
+            "risk_id": "risk-cf6161090e64",
+            "제목": "실시간 시세나 유료 데이터 수준의 정확도는 이번 범위에 포함되지 않는다.",
+            "설명": "실시간 시세나 유료 데이터 수준의 정확도는 이번 범위에 포함되지 않는다.",
+            "title": "실시간 시세나 유료 데이터 수준의 정확도는 이번 범위에 포함되지 않는다.",
+            "category": "risk",
+            "severity": "low",
+            "status": "open",
+            "introduced_by": "init",
+            "last_seen_by": "20260526210731-init-full",
+            "source_stage": "00_specify",
+            "source_artifacts": [
+                ".ai/features/init/00_spec.md"
+            ],
+            "created_at": "2026-05-26T21:33:12",
+            "updated_at": "2026-05-26T21:33:12"
+        }
+    ]
+}

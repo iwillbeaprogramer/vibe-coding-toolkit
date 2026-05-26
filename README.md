@@ -940,7 +940,7 @@ PC는 처음부터 크게 선언하는 문서가 아니라, standard/full pipeli
   승인된 규약만 담습니다. 모든 stage prompt에 자동 삽입됩니다.
 
 .ai/pc_review.py
-  미정 PC 후보를 Claude로 검토하고, 사용자 승인 후 후보 상태와 project_contract를 갱신합니다.
+  미정 PC 후보를 선택한 agent로 검토하고, 사용자 응답에 따라 후보 상태와 project_contract를 갱신합니다.
 ```
 
 ### 상태
@@ -953,7 +953,7 @@ PC 후보 상태는 세 가지만 사용합니다.
 기각
 ```
 
-`미정` 후보가 하나라도 있으면 새 pipeline을 시작할 수 없습니다.
+`미정` 후보가 있어도 새 pipeline은 시작할 수 있습니다. 하네스는 경고만 출력합니다.
 
 ### pipeline별 정책
 
@@ -968,7 +968,9 @@ full
   pipeline 완료 후 PC 후보 추출을 필수로 수행합니다.
 ```
 
-fast가 PC 후보를 만들지는 않지만, 이미 미정 후보가 있으면 fast도 시작할 수 없습니다.
+저장되는 후보는 `impact_scope: project_wide` 항목뿐입니다. 특정 스택 전용, 기능 한정, 구현 디테일 수준의 관찰은 버립니다.
+
+fast가 PC 후보를 만들지는 않지만, 이미 미정 후보가 있으면 시작 시 경고만 표시합니다.
 
 ### 미정 후보 정산
 
@@ -978,18 +980,24 @@ fast가 PC 후보를 만들지는 않지만, 이미 미정 후보가 있으면 f
 python .ai\pc_review.py
 ```
 
-이 스크립트는 인자를 받지 않습니다.
+기본 검토 agent는 `codex`입니다. 필요하면 아래처럼 바꿀 수 있습니다.
 
-실행하면 Claude가 현재 미정 후보와 `.ai/project_contract.md`를 함께 읽고, 후보별로 승인/기각/애매함 의견을 제시합니다.
+```powershell
+python .ai\pc_review.py --agent claude
+python .ai\pc_review.py --agent agy
+```
 
-사용자가 `Yes`를 입력하면 Claude가 직접 다음 파일을 수정합니다.
+실행하면 선택한 agent가 현재 미정 후보와 `.ai/project_contract.md`를 함께 읽고, 후보를 하나씩 검토합니다.
+
+각 후보마다 사용자가 `Yes`를 입력하면 승인으로 기록하고, 필요한 규칙을 `.ai/project_contract.md`에 반영합니다.
 
 ```text
 .ai/history/pc_candidates.json
 .ai/project_contract.md
 ```
 
-사용자가 `No`를 입력하면 아무 파일도 바꾸지 않고 미정 후보를 그대로 둡니다.
+각 후보마다 사용자가 `No`를 입력하면 해당 후보를 기각으로 기록합니다.
+따라서 정상 종료 후에는 미정 후보가 남지 않아야 합니다.
 
 ---
 

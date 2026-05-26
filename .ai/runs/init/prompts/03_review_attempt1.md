@@ -1,22 +1,120 @@
+# Local Harness Prompt
+
+## Harness Context
+- feature_name: init
+- pipeline_mode: full
+- stage: 03_review
+- preferred_model: Antigravity
+- performance: medium
+- output_file: .ai/features/init/03_review.md
+- result_json_file: .ai/features/init/03_review.result.json
+- run_state: .ai/runs/init/run.json
+- generated_at: 2026-05-26T21:16:52
+- defaults_mode: true
+- feature_name_locked: true
+
+## Decision Policy
+Use recommended defaults for ambiguous decisions. Do not return NEEDS_USER unless the task is impossible, unsafe, requires credentials/secrets that are not available, or would perform destructive/non-reversible actions. Record all default decisions and their rationale in the stage output.
+
+## Manual Provider Instructions
+1. The local harness is executing this prompt with the preferred model when possible.
+2. Make the requested file changes directly in the repository.
+3. Write the human-readable stage output file exactly at `.ai/features/init/03_review.md`.
+4. Also write the machine-readable stage result JSON exactly at `.ai/features/init/03_review.result.json`.
+5. Do not run `git commit`, `git reset`, `git checkout`, `git rebase`, or `git push`. The local harness owns Git history.
+6. This Git ownership rule overrides any preset text that appears to ask the model to create, amend, or push commits.
+7. For commit stages, leave the working tree commit-ready and record commit intent in the stage output; the harness will create or amend the commit.
+8. If `defaults_mode: true`, prefer recommended defaults over `NEEDS_USER` unless blocked by missing credentials, safety, destructive operations, or impossibility.
+9. If the stage needs user input under the decision policy, write both outputs with `status: NEEDS_USER`.
+10. If the stage fails, write both outputs with `status: FAIL` and a concrete blocking reason.
+11. If `feature_name_locked: true`, keep the existing `feature_name` exactly as provided by the harness. Do not rename or invent a different feature slug.
+12. End with a concise summary; the harness will inspect files, not your final message.
+
+## Machine Result JSON Contract
+The harness reads `.ai/features/init/03_review.result.json` first. Keep the `## 단계 결과` section in `.ai/features/init/03_review.md` for humans, but write this JSON file for the harness.
+
+Required JSON keys:
+- status: "PASS", "FAIL", "SKIPPED", or "NEEDS_USER"
+- next_stage: next stage id or "done"
+- human_gate_required: true or false
+- blocking_reason: string, use "" when there is no blocker
+
+Include any extra stage fields that the preset asks for, such as `risk_level`, `harness_commit_required`, `changed_files`, `verification_summary`, or `fix_inputs`.
+For PASS or FAIL stages, also include `history_notes` with these arrays when known: `implemented`, `risks`, `future_improvements`, `decisions`, and `unresolved_items`. Use empty arrays for categories with nothing to record. Prefer Korean text for human-facing titles, descriptions, reasons, risks, and decisions when the project context is Korean.
+
+## Project Contract
+Source: .ai/project_contract.md
+
+# Project Contract
+
+## Hard Rules
+- 모델은 Git commit, amend, reset, checkout, rebase, push를 직접 실행하지 않는다.
+- 기존 테스트를 삭제하거나 비활성화하지 않는다.
+- 요청 범위를 벗어난 리팩터링, 의존성 추가, 파일 이동은 하지 않는다.
+
+## Project Layout
+- 프로덕션 코드는 루트 `src/` 하위에 둔다.
+- 테스트 코드는 루트 `tests/` 하위에 둔다.
+- 새 테스트 파일을 `src/` 하위에 만들지 않는다.
+
+## Code Style
+- 새 코드는 같은 디렉터리의 기존 패턴, 네이밍, 파일 구조를 우선 따른다.
+- 프로젝트에 이미 명확한 네이밍 관례가 없으면 변수와 함수는 camelCase를 기본으로 한다.
+- 함수 이름은 가능하면 동사 또는 동사구로 시작한다. 예: `loadConfig`, `validateInput`, `renderItem`.
+- Boolean 값과 Boolean 반환 함수는 `is`, `has`, `can`, `should` 같은 의미 있는 접두사를 사용한다.
+- 이벤트 핸들러는 `handle` 또는 기존 프로젝트의 이벤트 네이밍 패턴을 따른다.
+- 값을 변환하는 함수는 `to`, `from`, `parse`, `format`, `normalize`처럼 변환 의도가 드러나는 이름을 사용한다.
+- 데이터를 가져오는 함수는 `get`, `load`, `fetch`, `read` 중 실제 동작에 맞는 동사를 사용한다.
+- 부수효과가 있는 함수는 `save`, `write`, `update`, `delete`, `send`, `create`처럼 변경 의도가 드러나는 동사를 사용한다.
+- 구현이 30줄을 넘어가면 함수나 작은 단위로 분리한다.
+
+## Reliability
+- 외부 입력, 파일, 네트워크, 프로세스 실행 결과는 실패 가능성을 명시적으로 처리한다.
+
+
+## Original User Request
+난 주식정보를 검색해서 디테일한 정보를 보는 윈도우 프로그램을 만들고싶어. 프론트는 WPF 백엔드는 파이썬 FastAPI로 제공하면 될거같아. WPF에서 종목명 예를들어 QLD를 검색하면 그 정보들을 주는거지. 주식쟁이들이 흔히 하는 정보들있자나 현재가, 종가 뭐 등등 엄청많아. 이것들을 다 보여주고, 차트까지 보였으면 좋겠어
+
+## Previous Stage Outputs
+- .ai/features/init/00_spec.md
+- .ai/features/init/00_spec.result.json
+- .ai/features/init/01_plan.md
+- .ai/features/init/01_plan.result.json
+- .ai/features/init/02_dev.md
+- .ai/features/init/02_dev.result.json
+
+## Additional Stage Inputs
+- none
+
+## Retry Context
+- none
+
+## Current Git Hints
+- current_head: 6d8a64a2cb6eef4417ed2c86c8534eb74026d2bf
+- changed_paths_excluding_runs: []
+- latest_harness_verification: none
+
+---
+
 ---
 stage: "03_review"
 role: "code_review"
 preferred_model: "Antigravity"
 model_policy: "preferred_not_hard_block"
 required_inputs:
-  - ".ai/features/[기능명]/00_spec.md"
-  - ".ai/features/[기능명]/01_plan.md"
-  - ".ai/features/[기능명]/02_dev.md"
+  - ".ai/features/init/00_spec.md"
+  - ".ai/features/init/01_plan.md"
+  - ".ai/features/init/02_dev.md"
 outputs:
-  - ".ai/features/[기능명]/03_review.md"
+  - ".ai/features/init/03_review.md"
 allowed_writes:
-  - ".ai/features/[기능명]/03_review.md"
+  - ".ai/features/init/03_review.md"
 forbidden_writes:
   - "production_code"
   - "tests"
-  - ".ai/features/[기능명]/00_spec.md"
-  - ".ai/features/[기능명]/01_plan.md"
-  - ".ai/features/[기능명]/02_dev.md"
+  - ".ai/features/init/00_spec.md"
+  - ".ai/features/init/01_plan.md"
+  - ".ai/features/init/02_dev.md"
 human_gate_required: false
 default_next_stage: "04_fix"
 ---
@@ -50,9 +148,9 @@ default_next_stage: "04_fix"
 ## 작업 순서
 
 1. 요청사항이 리뷰 불가능할 정도로 모호한 경우에만 `status: NEEDS_USER`로 멈춘다.
-2. `.ai/features/[기능명]/00_spec.md`의 목표, 범위, 요구사항, 위험도를 파악한다.
-3. `.ai/features/[기능명]/01_plan.md`의 구현 접근 방식, 변경 파일 계획, 위험 구간, 의존성, 테스트 전략을 파악한다.
-4. `.ai/features/[기능명]/02_dev.md`를 읽고 기능 목표, 구현 의도, Git 정보를 파악한다.
+2. `.ai/features/init/00_spec.md`의 목표, 범위, 요구사항, 위험도를 파악한다.
+3. `.ai/features/init/01_plan.md`의 구현 접근 방식, 변경 파일 계획, 위험 구간, 의존성, 테스트 전략을 파악한다.
+4. `.ai/features/init/02_dev.md`를 읽고 기능 목표, 구현 의도, Git 정보를 파악한다.
 5. 실제 변경 diff를 확인한다.
    - `02_dev.md`의 `diff_command`가 있으면 우선 사용한다.
    - `02_dev.md`의 `review_diff_command`가 있으면 우선 사용한다.
@@ -62,7 +160,7 @@ default_next_stage: "04_fix"
    - 어느 것도 불가능하면 `status: FAIL`로 기록하고 이유를 남긴다.
 6. 아래 리뷰 관점에 따라 코드를 검토한다.
 7. 지적 사항은 `BLOCKER / MAJOR / MINOR / NIT` severity로 분류한다.
-8. 리뷰 결과를 `.ai/features/[기능명]/03_review.md`에 작성한다.
+8. 리뷰 결과를 `.ai/features/init/03_review.md`에 작성한다.
 
 ---
 
@@ -142,10 +240,10 @@ default_next_stage: "04_fix"
 
 ## 기록 양식
 
-리뷰 완료 후 `.ai/features/[기능명]/03_review.md`에 아래 형식으로 작성한다.
+리뷰 완료 후 `.ai/features/init/03_review.md`에 아래 형식으로 작성한다.
 
 ```markdown
-# 03_review - [기능명]
+# 03_review - init
 
 작성: [실제 실행 모델]
 일시: YYYY-MM-DD
@@ -211,7 +309,7 @@ default_next_stage: "04_fix"
 - blocking_reason: 없음
 - risk_level: low / medium / high
 - produced_files:
-  - .ai/features/[기능명]/03_review.md
+  - .ai/features/init/03_review.md
 - changed_files:
 - commit_created: false
 - commit_message:

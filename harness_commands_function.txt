@@ -204,14 +204,20 @@ Project Contract candidate review
 =================================
 
 Standard and full pipelines extract Project Contract candidates after completion.
+Only `impact_scope: project_wide` candidates are stored. Stack-specific, feature-local, and implementation-detail observations are discarded.
 
-If any candidate is still pending (`미정`), all new fast/standard/full runs are blocked.
+If any candidate is still pending (`미정`), new fast/standard/full runs show a warning but are not blocked.
 
-Review pending candidates with Claude:
+Review pending candidates with the default agent (codex):
 
 python .ai\pc_review.py
 
-This script takes no arguments. Claude reads .ai\history\pc_candidates.json and .ai\project_contract.md, proposes approve/reject/ambiguous decisions, and asks for a Yes/No response.
+Choose a different review agent:
 
-If you answer Yes, Claude updates .ai\history\pc_candidates.json and .ai\project_contract.md.
-If you answer No, no files are changed and pending candidates remain.
+python .ai\pc_review.py --agent claude
+python .ai\pc_review.py --agent agy
+
+The selected agent reads .ai\history\pc_candidates.json and .ai\project_contract.md, then reviews candidates one by one.
+
+For each candidate, Yes approves it and updates .ai\project_contract.md when needed.
+For each candidate, No rejects it in .ai\history\pc_candidates.json.

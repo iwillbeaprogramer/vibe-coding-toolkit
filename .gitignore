@@ -4,6 +4,9 @@ Thumbs.db
 desktop.ini
 .idea/
 .vscode/
+.antigravitycli/
+.claude/
+.codex/
 *.log
 *.tmp
 *.cache

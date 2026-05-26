@@ -1,0 +1,165 @@
+{
+    "schema_version": 1,
+    "제목": "init 기능 요약",
+    "설명": "난 주식정보를 검색해서 디테일한 정보를 보는 윈도우 프로그램을 만들고싶어. 프론트는 WPF 백엔드는 파이썬 FastAPI로 제공하면 될거같아. WPF에서 종목명 예를들어 QLD를 검색하면 그 정보들을 주는거지. 주식쟁이들이 흔히 하는 정보들있자나 현재가, 종가 뭐 등등 엄청많아. 이것들을 다 보여주고, 차트까지 보였으면 좋겠어",
+    "feature": "init",
+    "first_seen_at": "2026-05-26T21:33:12",
+    "last_completed_at": "2026-05-26T21:33:12",
+    "latest_event_id": "20260526210731-init-full",
+    "event_ids": [
+        "20260526210731-init-full"
+    ],
+    "request_summary": "난 주식정보를 검색해서 디테일한 정보를 보는 윈도우 프로그램을 만들고싶어. 프론트는 WPF 백엔드는 파이썬 FastAPI로 제공하면 될거같아. WPF에서 종목명 예를들어 QLD를 검색하면 그 정보들을 주는거지. 주식쟁이들이 흔히 하는 정보들있자나 현재가, 종가 뭐 등등 엄청많아. 이것들을 다 보여주고, 차트까지 보였으면 좋겠어",
+    "latest_status": "complete",
+    "latest_pipeline": "full",
+    "implemented": [
+        "WPF 프론트엔드와 Python FastAPI 백엔드로 주식/ETF 정보를 조회하는 기능 스펙을 확정했다.",
+        "검색 입력, 백엔드 API, 요약 지표, 차트 데이터, 오류 처리, 제외 범위를 정의했다.",
+        "FastAPI 백엔드(src/stock-api)를 신규 구축하고 /health, /api/stocks/{symbol}/summary, /api/stocks/{symbol}/history 엔드포인트와 yfinance 어댑터 서비스를 추가했다.",
+        "WPF 메인 화면을 다크 테마 글래스모피즘 레이아웃으로 재구성하고, 검색 입력/요약 지표/Canvas 종가 라인 차트/상태 표시를 구현했다.",
+        "HttpClient 기반 비동기 검색 흐름과 404/5xx/연결 실패/타임아웃을 구분하는 오류 처리 및 로딩 UI 잠금을 구현했다.",
+        "tests/test_api.py에 FakeTicker 의존성 주입을 사용한 13개 테스트를 추가하고 전부 통과시켰다.",
+        "FastAPI 백엔드 종목 검색 및 시계열 차트 API 구현 완료",
+        "WPF UI 다크 테마 카드 디자인 및 Canvas/Polygon 기반 그라데이션 차트 렌더링 완성",
+        "Fake Ticker를 통한 오프라인 백엔드 단위 테스트 13종 구현 및 빌드 검증",
+        "TryFindResource 기반 안전한 테마 브러시 캐싱(브러시 6종)으로 ResourceReferenceKeyNotFoundException 및 매 렌더 시 리소스 탐색 비용 제거",
+        "Canvas.SizeChanged 30ms DispatcherTimer 디바운스로 리사이즈 폭주 시 마지막 1회만 차트 렌더링",
+        "Window.Closed 핸들러에서 HttpClient.Dispose 및 디바운스 타이머 정리로 자원 라이프사이클 명시화",
+        "검색 finally 블록에서 SymbolTextBox.Focus() + SelectAll()로 연속 검색 UX 보완",
+        "renderChart에서 range==0 분기 추가, 모든 종가 동일 시 수평선을 캔버스 Y 중앙(midY)에 배치",
+        "FastAPI 백엔드의 health, summary, history API가 테스트로 검증되었다.",
+        "WPF 프로젝트가 net7.0-windows 대상으로 경고 0개, 오류 0개로 빌드되었다.",
+        "03_review.md의 should_consider 및 optional 항목이 04_fix.md에서 모두 수용 처리되었고 MainWindow.xaml.cs 구현에 반영되어 있음을 확인했다.",
+        "WPF-FastAPI 미국 주식/ETF 검색 화면 및 Canvas/Polyline 가격 그라데이션 차트 렌더링 아키텍처 명세화",
+        "FastAPI API 엔드포인트(/health, /api/stocks/.../summary, /api/stocks/.../history) 명세 작성",
+        "03_review 피드백 보완 사항(브러시 캐싱, 30ms SizeChanged 디바운스, HttpClient Dispose, 편차 0 중앙 배치) 명세서 반영",
+        "FakeProvider 단위 테스트 13종 및 .NET 7.0 WPF 빌드 검증 현황 문서화"
+    ],
+    "future_improvements": [
+        "실시간 스트리밍 시세를 별도 데이터 공급원으로 확장한다.",
+        "캔들 차트, 보조지표, 관심종목, 포트폴리오 기능을 후속 기능으로 추가한다.",
+        "배포 패키징과 백엔드 자동 실행 방식을 별도 단계에서 설계한다.",
+        "향후 과거 종가 추이 외에 OHLCV 정보를 캔들스틱 차트로 전환 표시하는 기능 추가",
+        "OHLCV를 활용한 캔들 차트와 보조지표(MA, 거래량 막대) 추가.",
+        "yfinance 응답 캐싱과 지수 백오프 재시도 도입.",
+        "WPF 실행 시 백엔드 자동 기동/종료, 단일 배포 패키지화.",
+        "관심종목, 다중 종목 비교, 알림 기능.",
+        "WPF 차트 리사이즈 디바운스 도입을 통한 성능 튜닝",
+        "FindResource 리소스 캐싱 처리를 통한 예외 안정성 확보",
+        "검색 후 텍스트 박스 자동 SelectAll UX 보완",
+        "API 기본 URL과 타임아웃을 코드 상수에서 외부 설정 파일로 분리",
+        "차트에 OHLC/거래량 등 보조 시리즈 옵션 확장",
+        "WPF UI 자동화 테스트(예: WinAppDriver) 도입으로 5단계 검증을 자동화",
+        "WPF UI 자동화 테스트를 도입해 검색 입력, 로딩 상태, 오류 메시지, 차트 렌더링을 회귀 검증한다.",
+        "API 기본 URL과 타임아웃을 외부 설정 파일로 분리한다.",
+        "운영 사용 전 yfinance 응답 캐시와 공급자 장애 완화 전략을 추가한다.",
+        "OHLCV 데이터를 연계 활용한 WPF 캔들스틱 차트 기능 확장",
+        "WPF 시작 시 로컬 백엔드를 백그라운드 프로세스로 자동 Spawn해주는 기능 구현",
+        "MSI/ClickOnce 단일 마법사 원클릭 클라이언트 패키징 빌드 구축"
+    ],
+    "unresolved_items": [
+        {
+            "title": "없음",
+            "type": "review_finding",
+            "severity": "minor",
+            "status": "rejected",
+            "disposition": "rejected",
+            "reason_not_actioned": "",
+            "future_action": "",
+            "source_stage": "04_fix",
+            "source_artifact": ".ai/features/init/04_fix.md"
+        }
+    ],
+    "changed_files": {
+        "production": [
+            "src/stock-api/",
+            "src/stock-api/__init__.py",
+            "src/stock-api/main.py",
+            "src/stock-api/requirements.txt",
+            "src/stock-api/services.py",
+            "src/stock-dashboard/stock-dashboard.sln",
+            "src/stock-dashboard/stock-dashboard/App.xaml",
+            "src/stock-dashboard/stock-dashboard/App.xaml.cs",
+            "src/stock-dashboard/stock-dashboard/AssemblyInfo.cs",
+            "src/stock-dashboard/stock-dashboard/MainWindow.xaml",
+            "src/stock-dashboard/stock-dashboard/MainWindow.xaml.cs",
+            "src/stock-dashboard/stock-dashboard/stock-dashboard.csproj",
+            "src/stocks-dashboard/stocks-dashboard.sln",
+            "src/stocks-dashboard/stocks-dashboard/App.xaml",
+            "src/stocks-dashboard/stocks-dashboard/App.xaml.cs",
+            "src/stocks-dashboard/stocks-dashboard/AssemblyInfo.cs",
+            "src/stocks-dashboard/stocks-dashboard/MainWindow.xaml",
+            "src/stocks-dashboard/stocks-dashboard/MainWindow.xaml.cs",
+            "src/stocks-dashboard/stocks-dashboard/stocks-dashboard.csproj"
+        ],
+        "tests": [
+            "tests/",
+            "tests/__init__.py",
+            "tests/test_api.py"
+        ],
+        "harness_artifacts": [
+            ".ai/features/",
+            ".ai/features/init/00_spec.md",
+            ".ai/features/init/00_spec.result.json",
+            ".ai/features/init/01_plan.md",
+            ".ai/features/init/01_plan.result.json",
+            ".ai/features/init/02_dev.md",
+            ".ai/features/init/02_dev.result.json",
+            ".ai/features/init/03_review.md",
+            ".ai/features/init/03_review.result.json",
+            ".ai/features/init/04_fix.md",
+            ".ai/features/init/04_fix.result.json",
+            ".ai/features/init/05_verify.md",
+            ".ai/features/init/05_verify.result.json",
+            ".ai/features/init/06_document.md",
+            ".ai/features/init/06_document.result.json"
+        ]
+    },
+    "commits": {
+        "02_develop": "6d8a64a2cb6eef4417ed2c86c8534eb74026d2bf",
+        "04_fix": "179d81e9962f2c4ecb6e18b7e60b8b16cb607c5f",
+        "05_verify": "bbc375d206dc4803fc411107e5b4a133f1f11865"
+    },
+    "source_artifacts": [
+        ".ai/features/init/00_spec.md",
+        ".ai/features/init/00_spec.result.json",
+        ".ai/features/init/01_plan.md",
+        ".ai/features/init/01_plan.result.json",
+        ".ai/features/init/02_dev.md",
+        ".ai/features/init/02_dev.result.json",
+        ".ai/features/init/03_review.md",
+        ".ai/features/init/03_review.result.json",
+        ".ai/features/init/04_fix.md",
+        ".ai/features/init/04_fix.result.json",
+        ".ai/features/init/05_verify.md",
+        ".ai/features/init/05_verify.result.json",
+        ".ai/features/init/06_document.md",
+        ".ai/features/init/06_document.result.json",
+        ".ai/runs/init/run.json",
+        ".ai/runs/init/verification/latest.json"
+    ],
+    "runs": [
+        {
+            "event_id": "20260526210731-init-full",
+            "status": "complete",
+            "pipeline": "full",
+            "completed_at": "2026-05-26T21:33:12",
+            "commits": {
+                "02_develop": "6d8a64a2cb6eef4417ed2c86c8534eb74026d2bf",
+                "04_fix": "179d81e9962f2c4ecb6e18b7e60b8b16cb607c5f",
+                "05_verify": "bbc375d206dc4803fc411107e5b4a133f1f11865"
+            },
+            "verification": {
+                "status": "PASS",
+                "passed": true,
+                "failed_commands": [],
+                "commands": [
+                    "harness-python-compile",
+                    "git-diff-check"
+                ],
+                "source": ".ai/runs/init/verification/latest.json"
+            }
+        }
+    ],
+    "updated_at": "2026-05-26T21:33:12"
+}

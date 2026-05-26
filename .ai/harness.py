@@ -32,6 +32,7 @@ PC_PENDING_STATUS = "미정"
 PC_APPROVED_STATUS = "승인"
 PC_REJECTED_STATUS = "기각"
 PC_REVIEW_STAGE = "pc_candidates"
+PC_PROJECT_WIDE_SCOPE = "project_wide"
 
 STAGES = [
     "00_specify",
@@ -464,7 +465,10 @@ def is_harness_internal_path(path: str, feature: str) -> bool:
 
 
 SNAPSHOT_GENERATED_DIR_NAMES = {
+    ".antigravitycli",
     ".cache",
+    ".claude",
+    ".codex",
     ".gradle",
     ".git",
     ".idea",
@@ -1143,6 +1147,11 @@ def ensure_project_contract_file() -> None:
         "- 기존 테스트를 삭제하거나 비활성화하지 않는다.\n"
         "- 요청 범위를 벗어난 리팩터링, 의존성 추가, 파일 이동은 하지 않는다.\n"
         "\n"
+        "## Project Layout\n"
+        "- 프로덕션 코드는 루트 `src/` 하위에 둔다.\n"
+        "- 테스트 코드는 루트 `tests/` 하위에 둔다.\n"
+        "- 새 테스트 파일을 `src/` 하위에 만들지 않는다.\n"
+        "\n"
         "## Code Style\n"
         "- 새 코드는 같은 디렉터리의 기존 패턴, 네이밍, 파일 구조를 우선 따른다.\n"
         "- 프로젝트에 이미 명확한 네이밍 관례가 없으면 변수와 함수는 camelCase를 기본으로 한다.\n"
@@ -1176,21 +1185,22 @@ def project_contract_prompt_text() -> str:
     return f"## Project Contract\nSource: {rel(path)}\n\n{text}\n"
 
 
-def assert_no_pending_pc_candidates_for_new_run() -> None:
+def warn_pending_pc_candidates_for_new_run() -> None:
     pending = pending_pc_candidates()
     if not pending:
         return
     lines = [
-        color_text("새 파이프라인을 시작할 수 없습니다.", "red", "bold"),
+        color_text("Project Contract 후보 경고", "yellow", "bold"),
         "",
         (
             "미정 상태의 Project Contract 후보가 "
             f"{color_text(str(len(pending)), 'yellow', 'bold')}개 있습니다."
         ),
-        "먼저 후보를 승인 또는 기각해야 합니다.",
+        "새 파이프라인은 계속 시작하지만, 시간이 날 때 후보를 검토해 프로젝트 규약을 정리하세요.",
         "",
-        color_text("확인 및 정산:", "green", "bold"),
+        color_text("선택 검토 명령:", "green", "bold"),
         "  python .ai\\pc_review.py",
+        "  python .ai\\pc_review.py --agent claude  # optional: codex/claude/agy",
         "",
         color_text("미정 후보:", "yellow", "bold"),
     ]
@@ -1202,7 +1212,7 @@ def assert_no_pending_pc_candidates_for_new_run() -> None:
         )
     if len(pending) > 20:
         lines.append(f"  - ... and {len(pending) - 20} more")
-    raise HarnessError("\n".join(lines))
+    print("\n".join(lines), file=sys.stderr)
 
 
 def history_collection_key(path: Path) -> str:
@@ -2327,20 +2337,34 @@ The Project Contract is observational: it is based on conventions and decisions 
 {artifacts_text}
 
 ## Candidate Criteria
-Create a candidate only when the rule is likely to affect future feature development.
+Create a candidate only when the rule is clearly worth managing as a project-wide contract.
 
-Good candidates:
-- naming, architecture, state management, error handling, testing, UX, data flow, dependency policy
-- a convention or decision likely to recur in later features
-- a rule that extends or clarifies the existing Project Contract
-- a conflict with the existing Project Contract that needs explicit decision
+The bar is intentionally high. A candidate must pass all of these:
+- It applies across many future features or pipelines in this repository.
+- It controls project-level engineering behavior, not a local implementation choice.
+- It is likely to recur even when the exact feature, UI screen, or library changes.
+- It is not already clearly covered by the current Project Contract.
+- It belongs to a durable area such as naming, architecture, directory layout, testing policy, error handling, data boundaries, dependency policy, or cross-feature UX policy.
+
+Before emitting anything, classify every observation internally:
+- `project_wide`: broad project rule worth user review as Project Contract.
+- `stack_wide`: useful only for one technology stack, framework, platform, or library.
+- `feature_local`: useful only for this feature or domain.
+- `implementation_detail`: small tactical implementation detail.
+
+Emit only `project_wide` candidates.
+Discard `stack_wide`, `feature_local`, and `implementation_detail`. Do not include them in the JSON.
 
 Do not create candidates for:
 - one-off implementation details
+- framework-specific micro patterns unless the project has clearly standardized that stack globally
+- UI control behavior that is merely a convenience for one screen
+- performance tweaks tied to a single implementation
 - obvious bug fixes
 - temporary code
 - rules already clearly covered by the current Project Contract
 - weak observations with no future impact
+- anything that would be better recorded as history than enforced as a future project rule
 
 ## Output Contract
 Return exactly one JSON object. Do not wrap it in Markdown.
@@ -2349,9 +2373,10 @@ Schema:
 {{
   "candidates": [
     {{
+      "impact_scope": "project_wide",
       "category": "architecture | naming | ux | testing | error_handling | data | dependency | other",
       "rule_candidate": "A concise Korean rule phrased as something future work should do.",
-      "rationale": "Why this should be considered as a project-level rule.",
+      "rationale": "Why this is truly project-wide rather than stack-wide, feature-local, or an implementation detail.",
       "evidence": ["Relevant files, artifacts, or decisions."],
       "recommended_contract_section": "Hard Rules | Architecture | Naming | UX | Testing | Error Handling | Data | Dependencies | Other"
     }}
@@ -2363,6 +2388,9 @@ If there are no worthwhile candidates, return {{"candidates": []}}.
 
 
 def normalize_pc_candidate(raw: dict[str, Any], state: dict[str, Any], created_at: str) -> dict[str, Any] | None:
+    impact_scope = compact_history_text(raw.get("impact_scope") or raw.get("scope"), max_len=80)
+    if impact_scope.strip().lower() != PC_PROJECT_WIDE_SCOPE:
+        return None
     rule = compact_history_text(raw.get("rule_candidate") or raw.get("summary"), max_len=600)
     if not rule:
         return None
@@ -2377,6 +2405,7 @@ def normalize_pc_candidate(raw: dict[str, Any], state: dict[str, Any], created_a
         "source_pipeline": state.get("pipeline_mode") or PIPELINE_MODE,
         "source_run_created_at": state.get("created_at", ""),
         "source_artifacts": history_source_artifacts(feature),
+        "impact_scope": PC_PROJECT_WIDE_SCOPE,
         "category": category,
         "rule_candidate": rule,
         "rationale": compact_history_text(raw.get("rationale"), max_len=1000),
@@ -2467,7 +2496,9 @@ def extract_project_contract_candidates(state: dict[str, Any]) -> dict[str, Any]
     extraction = {
         "status": "PASS",
         "provider": "claude",
+        "raw_candidate_count": len(raw_candidates),
         "candidate_count": len(normalized),
+        "filtered_out_count": len(raw_candidates) - len(normalized),
         "recorded_count": append_result["added_count"],
         "candidate_ids": append_result["added_ids"],
         "candidates_path": append_result["path"],
@@ -2481,7 +2512,9 @@ def extract_project_contract_candidates(state: dict[str, Any]) -> dict[str, Any]
         "pc_candidate_extraction_completed",
         "project contract candidates extracted",
         stage=PC_REVIEW_STAGE,
+        raw_candidate_count=len(raw_candidates),
         candidate_count=len(normalized),
+        filtered_out_count=len(raw_candidates) - len(normalized),
         recorded_count=append_result["added_count"],
     )
     return extraction
@@ -2751,22 +2784,12 @@ def expand_policy_item(item: Any, feature: str) -> str:
 
 def is_test_path(path: str) -> bool:
     path = norm_repo_path(path)
-    parts = path.split("/")
-    name = parts[-1]
-    return (
-        "tests" in parts
-        or name.startswith("test_")
-        or ".test." in name
-        or ".spec." in name
-        or name.endswith("_test.py")
-    )
+    return path == "tests" or path.startswith("tests/")
 
 
 def is_production_code_path(path: str) -> bool:
     path = norm_repo_path(path)
-    if not (path.startswith("backend/") or path.startswith("frontend/")):
-        return False
-    return not is_test_path(path)
+    return path.startswith("src/") and not is_test_path(path)
 
 
 def direct_policy_match(path: str, policy_path: str) -> bool:
@@ -3083,6 +3106,46 @@ def print_provider_heartbeat(
     return stdout_size, stderr_size
 
 
+def suggested_retry_command(state: dict[str, Any], *, auto: bool = True) -> str:
+    script = ".ai\\harness_fast.py" if state.get("pipeline_mode") == "fast" else ".ai\\harness.py"
+    feature = str(state.get("feature_name") or "<feature>")
+    parts = ["python", script, "retry", feature]
+    if auto:
+        parts.extend(["--auto", "--yes"])
+    if state.get("defaults_mode"):
+        parts.append("--defaults")
+    performance = normalize_performance(state.get("performance"))
+    if performance != DEFAULT_PERFORMANCE:
+        parts.extend(["--performance", performance])
+    return " ".join(parts)
+
+
+def provider_log_hint(stdout_path: Path, stderr_path: Path, provider_log_path: Path) -> str:
+    return (
+        f"stdout={rel(stdout_path)} "
+        f"stderr={rel(stderr_path)} "
+        f"provider_log={rel(provider_log_path)}"
+    )
+
+
+def provider_failure_reason(
+    state: dict[str, Any],
+    *,
+    stage: str,
+    provider: str,
+    failure: str,
+    stdout_path: Path,
+    stderr_path: Path,
+    provider_log_path: Path,
+) -> str:
+    retry_command = suggested_retry_command(state)
+    return (
+        f"Provider {provider} {failure} while running stage {stage}. "
+        f"Inspect logs: {provider_log_hint(stdout_path, stderr_path, provider_log_path)}. "
+        f"Retry current stage: {retry_command}"
+    )
+
+
 def execute_current_prompt(state: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
     feature = state["feature_name"]
     stage = state["current_stage"]
@@ -3159,19 +3222,29 @@ def execute_current_prompt(state: dict[str, Any], timeout_seconds: int) -> dict[
                 proc.kill()
                 proc.wait()
                 elapsed = round(time.time() - started, 2)
+                reason = provider_failure_reason(
+                    state,
+                    stage=stage,
+                    provider=provider,
+                    failure=f"timed out after {timeout_seconds} seconds",
+                    stdout_path=stdout_path,
+                    stderr_path=stderr_path,
+                    provider_log_path=cli_log_path,
+                )
                 state["status"] = "blocked"
                 state["blocked"] = {
                     "stage": stage,
-                    "reason": (
-                        f"Provider {provider} timed out after {timeout_seconds} seconds. "
-                        f"See {rel(stderr_path)}"
-                    ),
+                    "reason": reason,
+                    "stdout": rel(stdout_path),
+                    "stderr": rel(stderr_path),
+                    "provider_log": rel(cli_log_path),
+                    "retry_command": suggested_retry_command(state),
                 }
                 write_handoff(
                     state,
-                    str(state["blocked"]["reason"]),
+                    reason,
                     stage=stage,
-                    next_action="provider timeout 원인을 확인하고 retry로 현재 단계를 다시 실행하세요.",
+                    next_action=f"로그를 확인한 뒤 현재 단계를 다시 실행하세요: {suggested_retry_command(state)}",
                 )
                 log_event(
                     state,
@@ -3179,7 +3252,10 @@ def execute_current_prompt(state: dict[str, Any], timeout_seconds: int) -> dict[
                     f"{provider} timed out",
                     stage=stage,
                     provider=provider,
+                    stdout=rel(stdout_path),
                     stderr=rel(stderr_path),
+                    provider_log=rel(cli_log_path),
+                    retry_command=suggested_retry_command(state),
                     elapsed_seconds=elapsed,
                 )
                 save_state(state)
@@ -3246,16 +3322,29 @@ def execute_current_prompt(state: dict[str, Any], timeout_seconds: int) -> dict[
         return state
 
     if proc.returncode != 0:
+        reason = provider_failure_reason(
+            state,
+            stage=stage,
+            provider=provider,
+            failure=f"exited with code {proc.returncode}",
+            stdout_path=stdout_path,
+            stderr_path=stderr_path,
+            provider_log_path=cli_log_path,
+        )
         state["status"] = "blocked"
         state["blocked"] = {
             "stage": stage,
-            "reason": f"Provider {provider} exited with code {proc.returncode}. See {rel(stderr_path)}",
+            "reason": reason,
+            "stdout": rel(stdout_path),
+            "stderr": rel(stderr_path),
+            "provider_log": rel(cli_log_path),
+            "retry_command": suggested_retry_command(state),
         }
         write_handoff(
             state,
-            str(state["blocked"]["reason"]),
+            reason,
             stage=stage,
-            next_action="stderr 로그를 확인하고 retry로 현재 단계를 다시 실행하세요.",
+            next_action=f"로그를 확인한 뒤 현재 단계를 다시 실행하세요: {suggested_retry_command(state)}",
         )
         log_event(
             state,
@@ -3264,7 +3353,10 @@ def execute_current_prompt(state: dict[str, Any], timeout_seconds: int) -> dict[
             stage=stage,
             provider=provider,
             returncode=proc.returncode,
+            stdout=rel(stdout_path),
             stderr=rel(stderr_path),
+            provider_log=rel(cli_log_path),
+            retry_command=suggested_retry_command(state),
             elapsed_seconds=elapsed,
         )
         save_state(state)
@@ -3278,21 +3370,30 @@ def execute_current_prompt(state: dict[str, Any], timeout_seconds: int) -> dict[
         and file_size(stdout_path) == 0
         and file_size(stderr_path) == 0
     ):
+        reason = provider_failure_reason(
+            state,
+            stage=stage,
+            provider=provider,
+            failure="exited with code 0 but produced no stdout, no stderr, and no required outputs",
+            stdout_path=stdout_path,
+            stderr_path=stderr_path,
+            provider_log_path=cli_log_path,
+        )
         state["status"] = "blocked"
         state["blocked"] = {
             "stage": stage,
-            "reason": (
-                f"Provider {provider} exited with code 0 but produced no stdout, no stderr, "
-                f"and no required outputs. This usually means the provider CLI did not execute the prompt. "
-                f"See {rel(cli_log_path)}."
-            ),
+            "reason": reason,
             "next_stage": stage,
+            "stdout": rel(stdout_path),
+            "stderr": rel(stderr_path),
+            "provider_log": rel(cli_log_path),
+            "retry_command": suggested_retry_command(state),
         }
         write_handoff(
             state,
-            str(state["blocked"]["reason"]),
+            reason,
             stage=stage,
-            next_action="provider_log를 확인하고 provider 설정 또는 인증 상태를 고친 뒤 retry 하세요.",
+            next_action=f"provider 설정 또는 인증 상태를 고친 뒤 현재 단계를 다시 실행하세요: {suggested_retry_command(state)}",
         )
         log_event(
             state,
@@ -3300,7 +3401,10 @@ def execute_current_prompt(state: dict[str, Any], timeout_seconds: int) -> dict[
             f"{provider} exited without output",
             stage=stage,
             provider=provider,
+            stdout=rel(stdout_path),
+            stderr=rel(stderr_path),
             provider_log=rel(cli_log_path),
+            retry_command=suggested_retry_command(state),
             elapsed_seconds=elapsed,
         )
         save_state(state)
@@ -3662,7 +3766,7 @@ def create_run(
     defaults_mode: bool = False,
     performance: Any | None = None,
 ) -> dict[str, Any]:
-    assert_no_pending_pc_candidates_for_new_run()
+    warn_pending_pc_candidates_for_new_run()
     assert_no_unpushed_commits_for_new_run()
     assert_no_incomplete_runs_for_new_run()
     ensure_dirs()
@@ -4458,9 +4562,14 @@ def explain_lines(state: dict[str, Any]) -> list[str]:
     elif status == "blocked":
         blocked = state.get("blocked", {})
         reason = blocked.get("reason") if isinstance(blocked, dict) else None
+        retry_command = (
+            blocked.get("retry_command")
+            if isinstance(blocked, dict) and blocked.get("retry_command")
+            else suggested_retry_command(state)
+        )
         lines.append(f"- 현재 막힌 이유: {reason or 'blocked 상세 정보 없음'}")
         lines.append(f"- 실패 인수인계 파일을 확인하세요: {state.get('last_handoff') or rel(handoff_path(feature))}")
-        lines.append(f"- 재시도: python {script} retry {feature}")
+        lines.append(f"- 재시도: {retry_command}")
     elif expected_md and not expected_md.exists() and status in {"waiting_for_model", "model_completed"}:
         lines.append("- 모델이 끝났거나 대기 중이지만 필수 md 산출물이 아직 없습니다.")
         lines.append(f"- 재시도: python {script} retry {feature}")

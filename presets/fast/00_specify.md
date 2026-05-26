@@ -20,6 +20,13 @@ default_next_stage: "01_develop"
 
 # Fast Specify 프리셋 (0단계)
 
+## 경로 원칙
+
+- 프로덕션 코드는 루트 `src/` 하위 파일만 의미한다.
+- 테스트 코드는 루트 `tests/` 하위 파일만 의미한다.
+- 새 테스트 파일은 `tests/` 하위에만 만든다. `src/` 하위에 테스트 파일을 만들지 않는다.
+- `vendor/`, `packages/`, `dist/`, `build/` 등 외부/생성 산출물 디렉터리는 계획/수정/검증 대상에서 제외하고, 필요하면 생성물 또는 외부 산출물로만 기록한다.
+
 ## 실행 정책
 
 - 권장 담당 모델은 Antigravity이다.
@@ -120,8 +127,8 @@ fast 파이프라인은 `low`와 `medium`을 기본 대상으로 한다.
 - 충돌 가능성이 있는 부분:
 
 ## 구현 계획
-- path/to/file.py: 변경할 내용
-- path/to/test_file.py: 추가 또는 수정할 테스트
+- src/path/to/file.py: 변경할 내용
+- tests/path/to/test_file.py: 추가 또는 수정할 테스트
 
 ## 데이터 / 제어 흐름
 - 입력이 어디서 들어와 어떤 단계를 거쳐 출력되는지 간단히 설명

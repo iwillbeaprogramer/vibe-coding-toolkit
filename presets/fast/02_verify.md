@@ -28,6 +28,13 @@ default_next_stage_on_fail: "01_develop"
 
 # Fast Verify 프리셋 (2단계)
 
+## 경로 원칙
+
+- 프로덕션 코드는 루트 `src/` 하위 파일만 의미한다.
+- 테스트 코드는 루트 `tests/` 하위 파일만 의미한다.
+- 새 테스트 파일은 `tests/` 하위에만 만든다. `src/` 하위에 테스트 파일을 만들지 않는다.
+- `vendor/`, `packages/`, `dist/`, `build/` 등 외부/생성 산출물 디렉터리는 계획/수정/검증 대상에서 제외하고, 필요하면 생성물 또는 외부 산출물로만 기록한다.
+
 ## 실행 정책
 
 - 권장 담당 모델은 Codex이다.
@@ -38,7 +45,7 @@ default_next_stage_on_fail: "01_develop"
 - 모델이 `status: PASS`를 기록해도 하네스 검증 명령 중 하나라도 실패하면 하네스는 이 단계를 `FAIL`로 덮어쓰고 `01_develop`로 되돌린다.
 - 하네스 실행 결과는 `.ai/runs/[기능명]/verification/latest.json`에 저장된다.
 - 프로덕션 코드는 절대 수정하지 않는다.
-- 신규 테스트 코드는 작성할 수 있다.
+- 신규 테스트 코드는 루트 `tests/` 하위에만 작성할 수 있다.
 - 기존 테스트 코드는 수정하거나 삭제하지 않는다.
 - 검증 실패 시 이 단계는 커밋되지 않으며, 실패 기록과 신규 테스트는 다음 `01_develop` 입력으로 넘긴다.
 
@@ -56,7 +63,7 @@ default_next_stage_on_fail: "01_develop"
 1. `.ai/features/[기능명]/00_spec.md`의 목표, acceptance criteria, 검증 계획을 읽는다.
 2. `.ai/features/[기능명]/01_dev.md`의 구현 요약, 변경 파일, 테스트 결과, 남은 위험을 읽는다.
 3. acceptance criteria가 실제 코드에 반영되었는지 확인한다.
-4. 필요하면 신규 테스트를 추가한다. 기존 테스트는 수정하지 않는다.
+4. 필요하면 루트 `tests/` 하위에 신규 테스트를 추가한다. 기존 테스트는 수정하지 않는다.
 5. `.ai/harness.config.json`의 검증 명령과 같은 범위의 테스트/빌드를 실행한다.
 6. 실패하면 원인, 재현 명령, `01_develop`에서 수정할 방향을 기록하고 `status: FAIL`, `next_stage: 01_develop`로 둔다.
 7. 통과하면 `status: PASS`, `next_stage: done`으로 둔다.
@@ -115,7 +122,7 @@ default_next_stage_on_fail: "01_develop"
 - status: READY_FOR_01_DEVELOP / NONE
 - 01_develop이 우선 처리할 항목:
 - 실패 재현 명령:
-- 02_verify에서 추가한 테스트 파일:
+- 02_verify에서 추가한 테스트 파일 (`tests/` 하위):
 - 관련 파일:
 - 기대 동작:
 - 실제 동작:
