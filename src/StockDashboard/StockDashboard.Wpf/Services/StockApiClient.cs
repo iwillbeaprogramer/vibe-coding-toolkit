@@ -33,8 +33,12 @@ public sealed class StockApiClient : IStockApiClient
                 "백엔드 서버에 연결할 수 없습니다. FastAPI 서버가 실행 중인지 확인해 주세요.")
             { };
         }
-        catch (TaskCanceledException)
+        catch (TaskCanceledException ex)
         {
+            if (ct.IsCancellationRequested)
+            {
+                throw new OperationCanceledException("사용자에 의해 검색 요청이 취소되었습니다.", ex, ct);
+            }
             throw new StockApiException(0, "timeout", "요청이 시간 초과되었습니다.");
         }
 

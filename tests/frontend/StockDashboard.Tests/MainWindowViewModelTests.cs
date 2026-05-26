@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -15,7 +16,7 @@ public class MainWindowViewModelTests
         public string? LastSymbol { get; private set; }
         public string? LastRange { get; private set; }
         public StockDetailDto? Response { get; set; }
-        public StockApiException? ToThrow { get; set; }
+        public Exception? ToThrow { get; set; }
 
         public Task<StockDetailDto> GetStockDetailAsync(string symbol, string range, CancellationToken ct = default)
         {
@@ -127,6 +128,25 @@ public class MainWindowViewModelTests
 
         Assert.False(vm.HasResult);
         Assert.Equal("connection refused", vm.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task SearchAsync_UserCancellation_DoesNotSurfaceErrorMessage()
+    {
+        // When the user re-types quickly, the prior in-flight request is cancelled
+        // and the API client throws OperationCanceledException. The ViewModel must
+        // swallow it silently — no error banner, no HasResult flip.
+        var fake = new FakeApiClient
+        {
+            ToThrow = new OperationCanceledException("user cancelled"),
+        };
+        var vm = new MainWindowViewModel(fake) { SymbolInput = "QLD" };
+
+        await vm.SearchAsync();
+
+        Assert.Null(vm.ErrorMessage);
+        Assert.False(vm.HasResult);
+        Assert.False(vm.IsBusy);
     }
 
     [Fact]

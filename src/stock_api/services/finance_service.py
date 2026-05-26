@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import math
 import re
@@ -29,6 +30,10 @@ logger = logging.getLogger(__name__)
 _SYMBOL_PATTERN = re.compile(r"^[A-Za-z0-9.\-]{1,15}$")
 
 _ALLOWED_RANGES = {"1mo", "6mo", "1y"}
+
+# Cap on how long the upstream provider call may block. yfinance is synchronous
+# and has no native timeout knob, so we run it in a worker thread and abandon it.
+_UPSTREAM_TIMEOUT_SECONDS = 6.0
 
 
 def normalize_symbol(raw: str | None) -> str:
@@ -76,12 +81,7 @@ class RawTickerData:
 TickerLoader = Callable[[str, str], RawTickerData]
 
 
-def _default_loader(symbol: str, range_: str) -> RawTickerData:
-    """Default loader that pulls live data from yfinance.
-
-    Kept as a thin adapter so unit tests can inject a fake loader instead of
-    hitting the network.
-    """
+def _fetch_from_yfinance(symbol: str, range_: str) -> RawTickerData:
     try:
         import yfinance as yf  # local import: keeps tests runnable without yfinance
     except Exception as exc:  # pragma: no cover - import safety net
@@ -118,6 +118,30 @@ def _default_loader(symbol: str, range_: str) -> RawTickerData:
             )
 
     return RawTickerData(info=info, history=rows)
+
+
+def _default_loader(symbol: str, range_: str) -> RawTickerData:
+    """Default loader that pulls live data from yfinance with a hard timeout.
+
+    yfinance is synchronous and offers no timeout, so we run it in a worker
+    thread and bail out as UpstreamDataError if the call exceeds
+    ``_UPSTREAM_TIMEOUT_SECONDS``. Kept as a thin adapter so unit tests can
+    inject a fake loader instead of hitting the network.
+    """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(_fetch_from_yfinance, symbol, range_)
+        try:
+            return future.result(timeout=_UPSTREAM_TIMEOUT_SECONDS)
+        except concurrent.futures.TimeoutError as exc:
+            logger.warning(
+                "yfinance call timed out after %.1fs for %s",
+                _UPSTREAM_TIMEOUT_SECONDS,
+                symbol,
+            )
+            raise UpstreamDataError(
+                "데이터 공급처 응답이 지연되었습니다.",
+                detail=f"upstream timeout after {_UPSTREAM_TIMEOUT_SECONDS:.0f}s",
+            ) from exc
 
 
 def _looks_empty(raw: RawTickerData) -> bool:

@@ -1,0 +1,77 @@
+{
+  "status": "PASS",
+  "next_stage": "05_verify",
+  "human_gate_required": false,
+  "blocking_reason": "",
+  "risk_level": "low",
+  "produced_files": [
+    ".ai/features/initial-project/04_fix.md",
+    ".ai/features/initial-project/04_fix.result.json"
+  ],
+  "changed_files": [
+    "src/StockDashboard/StockDashboard.Wpf/Views/MainWindow.xaml.cs",
+    "src/StockDashboard/StockDashboard.Wpf/Services/StockApiClient.cs",
+    "src/stock_api/services/finance_service.py",
+    "tests/backend/test_finance_api.py",
+    "tests/frontend/StockDashboard.Tests/MainWindowViewModelTests.cs",
+    ".ai/features/initial-project/04_fix.md",
+    ".ai/features/initial-project/04_fix.result.json"
+  ],
+  "harness_commit_required": true,
+  "commit_created_by_model": false,
+  "commit_mode_suggestion": "create",
+  "commit_message_suggestion": "initial-project[20260526-230256][04_fix]",
+  "no_code_changes": false,
+  "no_code_changes_reason": "",
+  "test_commands": [
+    "python -m pytest tests/backend -q"
+  ],
+  "verification_summary": {
+    "backend_pytest": "16 passed, 1 warning in 0.44s",
+    "frontend_xunit": "not_run_locally: 로컬 dotnet SDK 7.0.401뿐이라 net8.0-windows 타깃 빌드 불가, 05_verify 단계의 .NET 8 SDK 환경에서 실행 예정"
+  },
+  "fix_inputs": {
+    "must_fix_accepted": [
+      "BLOCKER: MainWindow.xaml.cs PropertyChanged 트리거를 HasResult → Stock 으로 교체",
+      "MAJOR: StockApiClient.cs TaskCanceledException 처리에서 ct.IsCancellationRequested 분기로 사용자 취소를 OperationCanceledException으로 재전송"
+    ],
+    "should_consider_accepted": [
+      "MINOR: finance_service.py yfinance 호출에 워커 스레드 + 6초 future.result(timeout) 도입, UpstreamDataError로 변환"
+    ],
+    "optional_accepted": [
+      "NIT: MainWindow.xaml.cs Closed 이벤트에서 PropertyChanged 구독 해제"
+    ],
+    "optional_rejected": [
+      "NIT: _coerce_float/_coerce_int 사전 isinstance 한정 — 기존 try/except + NaN/Inf 검사로 충분하며 신규 회귀 테스트로 보강됨"
+    ],
+    "verification_failures_addressed": []
+  },
+  "model_mismatch": false,
+  "actual_model": "Claude (Opus 4.7)",
+  "history_notes": {
+    "implemented": [
+      "WPF MainWindow의 차트 갱신 트리거를 HasResult에서 Stock 프로퍼티 변경 감지로 교체하여 재검색 시 차트 동기화 보장",
+      "WPF StockApiClient에서 사용자 취소(TaskCanceledException + ct.IsCancellationRequested)를 OperationCanceledException으로 재전송해 빠른 연속 검색 시 잘못된 타임아웃 배너 노출 차단",
+      "FastAPI finance_service의 yfinance 호출을 워커 스레드 + 6초 타임아웃으로 감싸 외부 장애 시 백엔드 무한 대기 방지 및 502 UpstreamDataError로 빠른 변환",
+      "WPF MainWindow 종료 시 PropertyChanged 및 Closed 이벤트를 정리하는 표준 클린업 패턴 도입",
+      "백엔드 NaN/Inf 수치 필드가 응답 JSON에서 null로 안착하는지 검증하는 회귀 테스트 추가",
+      "프론트엔드 사용자 취소 시 ErrorMessage/HasResult/IsBusy가 깨끗하게 유지되는지 검증하는 단위 테스트 추가"
+    ],
+    "risks": [
+      "프론트엔드 xUnit 테스트는 로컬 dotnet 7만 설치되어 04_fix 단계에서 실행하지 못했고 05_verify 단계의 .NET 8 SDK 환경에 실행을 의존함",
+      "yfinance 워커 스레드 타임아웃은 결과만 포기할 뿐 실제 백그라운드 스레드는 계속 실행되므로, 야후 측 장기 행 상황이 지속되면 스레드가 누적될 수 있음 (단발 검색 부하 수준에서는 무시 가능)"
+    ],
+    "future_improvements": [
+      "FastAPI 엔드포인트를 async로 전환하고 asyncio.to_thread + asyncio.wait_for 조합으로 더 깔끔한 비동기 타임아웃 구조 검토",
+      "WPF 뷰모델에 차트 시리즈 자체를 ObservableProperty로 노출하여 코드비하인드의 PropertyChanged 핸들러 자체를 제거하는 MVVM 순수화"
+    ],
+    "decisions": [
+      "차트 갱신 트리거 후보로 ChartPoints 컬렉션 변경 이벤트가 아닌 Stock 프로퍼티 변경 감지를 선택 — Stock은 매 성공마다 새 인스턴스로 치환되므로 reference 비교가 보장되고 코드 변경 최소화",
+      "_coerce_float/_coerce_int 사전 isinstance 한정 지적은 거부 — 기존 try/except + math.isnan/isinf 검사로 yfinance가 반환하는 모든 비정상 입력을 안전 처리 가능하며 신규 NaN/Inf 회귀 테스트가 직렬화 경계까지 커버",
+      "yfinance 타임아웃 임계값을 6초로 설정 — WPF HttpClient 타임아웃 10초보다 작아 클라이언트가 504/timeout 자체 메시지를 보기 전에 502 UpstreamDataError 응답을 받을 수 있도록 함"
+    ],
+    "unresolved_items": [
+      "프론트엔드 xUnit 테스트의 .NET 8 환경 실행 (05_verify 단계에서 검증 예정)"
+    ]
+  }
+}

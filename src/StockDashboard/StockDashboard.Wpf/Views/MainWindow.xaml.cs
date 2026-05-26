@@ -20,11 +20,20 @@ public partial class MainWindow : Window
         _viewModel = new MainWindowViewModel(new StockApiClient());
         DataContext = _viewModel;
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
+        Closed += OnWindowClosed;
+    }
+
+    private void OnWindowClosed(object? sender, System.EventArgs e)
+    {
+        _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
+        Closed -= OnWindowClosed;
     }
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(MainWindowViewModel.HasResult) && _viewModel.HasResult)
+        // Stock is replaced on every successful search, so its PropertyChanged fires
+        // each time — unlike HasResult, which stays true after the first success.
+        if (e.PropertyName == nameof(MainWindowViewModel.Stock) && _viewModel.HasResult)
         {
             RefreshChart();
         }

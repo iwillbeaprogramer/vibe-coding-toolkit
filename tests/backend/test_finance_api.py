@@ -199,3 +199,24 @@ def test_health_endpoint():
     res = client.get("/api/health")
     assert res.status_code == 200
     assert res.json() == {"status": "ok"}
+
+
+def test_endpoint_serializes_nan_and_inf_metrics_as_null(monkeypatch):
+    # yfinance occasionally returns NaN/Inf in numeric fields. _coerce_float must
+    # absorb these so the response JSON stays valid (Pydantic v2 rejects NaN in
+    # the default serializer) and the field reaches the WPF client as null.
+    info = _good_info()
+    info["trailingPE"] = float("nan")
+    info["forwardPE"] = float("nan")
+    info["beta"] = float("inf")
+    info["marketCap"] = float("-inf")
+    monkeypatch.setattr(
+        finance_service, "_default_loader", _make_loader(info, _good_history())
+    )
+    client = TestClient(create_app())
+    res = client.get("/api/stock/QLD")
+    assert res.status_code == 200
+    metrics = res.json()["metrics"]
+    assert metrics["pe_ratio"] is None
+    assert metrics["beta"] is None
+    assert metrics["market_cap"] is None
