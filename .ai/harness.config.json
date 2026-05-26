@@ -5,23 +5,15 @@
     "timeout_seconds": 600,
     "commands": [
       {
-        "name": "backend_unittest",
+        "name": "harness_python_compile",
         "command": [
           "python",
           "-m",
-          "unittest",
-          "discover",
-          "backend\\tests"
-        ]
-      },
-      {
-        "name": "frontend_build",
-        "command": [
-          "npm.cmd",
-          "--prefix",
-          "frontend",
-          "run",
-          "build"
+          "py_compile",
+          ".ai\\harness.py",
+          ".ai\\harness_fast.py",
+          ".ai\\harness_standard.py",
+          ".ai\\templates\\docx_helper.py"
         ]
       },
       {

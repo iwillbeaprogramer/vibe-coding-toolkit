@@ -21,8 +21,10 @@ AI_DIR = ROOT / ".ai"
 RUNS_DIR = AI_DIR / "runs"
 FEATURES_DIR = AI_DIR / "features"
 DOCS_DIR = AI_DIR / "docs"
+HISTORY_DIR = AI_DIR / "history"
 PRESETS_DIR = ROOT / "presets" / "full"
 PIPELINE_MODE = "full"
+HISTORY_SCHEMA_VERSION = 1
 
 STAGES = [
     "00_specify",
@@ -877,6 +879,1107 @@ def latest_verification_result_path(feature: str) -> Path:
     return verification_dir(feature) / "latest.json"
 
 
+def history_events_path() -> Path:
+    return HISTORY_DIR / "events.json"
+
+
+def history_legacy_events_path() -> Path:
+    return HISTORY_DIR / "events.jsonl"
+
+
+def history_decisions_path() -> Path:
+    return HISTORY_DIR / "decisions.json"
+
+
+def history_legacy_decisions_path() -> Path:
+    return HISTORY_DIR / "decisions.jsonl"
+
+
+def history_risks_path() -> Path:
+    return HISTORY_DIR / "risks.json"
+
+
+def history_unresolved_items_path() -> Path:
+    return HISTORY_DIR / "unresolved_items.json"
+
+
+def history_features_dir() -> Path:
+    return HISTORY_DIR / "features"
+
+
+def history_summary_path() -> Path:
+    return HISTORY_DIR / "summary.md"
+
+
+def write_json_file(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = json.dumps(value, ensure_ascii=False, indent=4) + "\n"
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
+
+
+def read_json_file(path: Path, default: Any) -> Any:
+    if not path.exists():
+        return default
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return default
+
+
+def history_collection_key(path: Path) -> str:
+    name = path.name.lower()
+    if name.startswith("event"):
+        return "events"
+    if name.startswith("decision"):
+        return "decisions"
+    return "items"
+
+
+def read_history_collection(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    if path.suffix.lower() == ".json":
+        parsed = read_json_file(path, {})
+        if isinstance(parsed, list):
+            return [item for item in parsed if isinstance(item, dict)]
+        if isinstance(parsed, dict):
+            collection = parsed.get(history_collection_key(path), [])
+            if isinstance(collection, list):
+                return [item for item in collection if isinstance(item, dict)]
+        return []
+
+    items: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            items.append(parsed)
+    return items
+
+
+def write_history_collection(path: Path, items: list[dict[str, Any]]) -> None:
+    key = history_collection_key(path)
+    write_json_file(path, {"schema_version": HISTORY_SCHEMA_VERSION, key: items})
+
+
+def ensure_history_store() -> bool:
+    initialized = not HISTORY_DIR.exists()
+    HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    history_features_dir().mkdir(parents=True, exist_ok=True)
+    if not history_events_path().exists():
+        write_history_collection(history_events_path(), read_history_collection(history_legacy_events_path()))
+        initialized = True
+    if not history_decisions_path().exists():
+        write_history_collection(history_decisions_path(), read_history_collection(history_legacy_decisions_path()))
+        initialized = True
+    if not history_risks_path().exists():
+        write_json_file(history_risks_path(), {"schema_version": HISTORY_SCHEMA_VERSION, "risks": []})
+        initialized = True
+    if not history_unresolved_items_path().exists():
+        write_json_file(
+            history_unresolved_items_path(),
+            {"schema_version": HISTORY_SCHEMA_VERSION, "items": []},
+        )
+        initialized = True
+    if not history_summary_path().exists():
+        history_summary_path().write_text(
+            "# 프로젝트 히스토리\n\n"
+            "로컬 하네스가 자동 생성한 장기 기록 요약입니다.\n",
+            encoding="utf-8",
+        )
+        initialized = True
+    return initialized
+
+
+def iter_jsonl(path: Path) -> list[dict[str, Any]]:
+    return read_history_collection(path)
+
+
+def append_jsonl_if_missing(path: Path, item: dict[str, Any], id_key: str) -> bool:
+    item_id = str(item.get(id_key) or "")
+    if item_id:
+        for existing in iter_jsonl(path):
+            if str(existing.get(id_key) or "") == item_id:
+                return False
+    if path.suffix.lower() == ".json":
+        items = iter_jsonl(path)
+        items.append(item)
+        write_history_collection(path, items)
+        return True
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(item, ensure_ascii=False, sort_keys=True) + "\n")
+    return True
+
+
+def history_timestamp_id(value: Any) -> str:
+    stamp = re.sub(r"\D+", "", str(value or ""))[:14]
+    return stamp or now_stamp().replace("-", "")
+
+
+def history_event_id(state: dict[str, Any]) -> str:
+    feature = slugify(str(state.get("feature_name") or "feature"))
+    pipeline = slugify(str(state.get("pipeline_mode") or PIPELINE_MODE))
+    return f"{history_timestamp_id(state.get('created_at'))}-{feature}-{pipeline}"
+
+
+def compact_history_text(value: Any, max_len: int = 240) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        text = json.dumps(value, ensure_ascii=False, sort_keys=True)
+    else:
+        text = str(value)
+    text = re.sub(r"\s+", " ", text).strip()
+    if text.lower() in {"", "none", "n/a", "na", "null", "[]", "{}"}:
+        return ""
+    if len(text) > max_len:
+        return text[: max_len - 3].rstrip() + "..."
+    return text
+
+
+def history_list(value: Any, max_items: int = 40) -> list[str]:
+    items: list[str] = []
+
+    def add(item: Any) -> None:
+        if isinstance(item, list):
+            for child in item:
+                add(child)
+            return
+        if isinstance(item, dict):
+            title = (
+                item.get("title")
+                or item.get("summary")
+                or item.get("description")
+                or item.get("risk")
+                or item.get("decision")
+                or item
+            )
+            text = compact_history_text(title)
+        else:
+            text = compact_history_text(item)
+        if text and text not in items:
+            items.append(text)
+
+    add(value)
+    return items[:max_items]
+
+
+def history_object_list(value: Any, title_keys: list[str], max_items: int = 40) -> list[dict[str, Any]]:
+    objects: list[dict[str, Any]] = []
+
+    def add(item: Any) -> None:
+        if isinstance(item, list):
+            for child in item:
+                add(child)
+            return
+        if isinstance(item, dict):
+            copied = dict(item)
+            title = next((copied.get(key) for key in title_keys if copied.get(key)), None)
+            copied["title"] = compact_history_text(title or copied.get("title") or copied)
+        else:
+            copied = {"title": compact_history_text(item)}
+        if copied["title"] and copied["title"] not in {obj.get("title") for obj in objects}:
+            objects.append(copied)
+
+    add(value)
+    return objects[:max_items]
+
+
+def markdown_sections(text: str) -> dict[str, str]:
+    sections: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in text.splitlines():
+        match = re.match(r"^##+\s+(.+?)\s*$", line)
+        if match:
+            current = match.group(1).strip()
+            sections.setdefault(current, [])
+            continue
+        if current:
+            sections[current].append(line)
+    return {key: "\n".join(lines).strip() for key, lines in sections.items()}
+
+
+def section_matches(heading: str, needles: list[str]) -> bool:
+    lower = heading.lower()
+    return any(needle.lower() in lower for needle in needles)
+
+
+def markdown_section_items(text: str, heading_needles: list[str], max_items: int = 20) -> list[str]:
+    items: list[str] = []
+    for heading, body in markdown_sections(text).items():
+        if not section_matches(heading, heading_needles):
+            continue
+        in_fence = False
+        for raw_line in body.splitlines():
+            line = raw_line.strip()
+            if line.startswith("```"):
+                in_fence = not in_fence
+                continue
+            if in_fence or not line or line.startswith("|") or set(line) <= {"-", " "}:
+                continue
+            if line.startswith("- "):
+                line = line[2:].strip()
+            elif line.startswith("* "):
+                line = line[2:].strip()
+            elif re.match(r"^\d+\.\s+", line):
+                line = re.sub(r"^\d+\.\s+", "", line).strip()
+            elif items:
+                continue
+            text_item = compact_history_text(line)
+            if text_item and text_item not in items:
+                items.append(text_item)
+            if len(items) >= max_items:
+                return items
+    return items
+
+
+def safe_stage_text(feature: str, stage: str) -> str:
+    path = stage_output_path(feature, stage)
+    if not path.exists():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def load_history_stage_results(feature: str) -> dict[str, dict[str, Any]]:
+    results: dict[str, dict[str, Any]] = {}
+    for stage in STAGES:
+        result_path = stage_result_json_path(feature, stage)
+        if result_path.exists():
+            parsed = read_json_file(result_path, {})
+            if isinstance(parsed, dict):
+                results[stage] = parsed
+                continue
+        text = safe_stage_text(feature, stage)
+        if text:
+            parsed = find_stage_result(text)
+            if parsed:
+                results[stage] = parsed
+    return results
+
+
+def history_source_artifacts(feature: str) -> list[str]:
+    artifacts: list[str] = []
+    for stage in STAGES:
+        for path in [stage_output_path(feature, stage), stage_result_json_path(feature, stage)]:
+            if path.exists():
+                artifacts.append(rel(path))
+    latest = latest_verification_result_path(feature)
+    if latest.exists():
+        artifacts.append(rel(latest))
+    run_json = state_path(feature)
+    if run_json.exists():
+        artifacts.append(rel(run_json))
+    return sorted(dict.fromkeys(artifacts))
+
+
+def split_event_paths(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [norm_repo_path(str(item)) for item in value if str(item).strip()]
+    if not isinstance(value, str):
+        return []
+    return [norm_repo_path(part.strip()) for part in value.split(",") if part.strip()]
+
+
+def collect_history_changed_files(
+    state: dict[str, Any],
+    stage_results: dict[str, dict[str, Any]],
+) -> dict[str, list[str]]:
+    paths: list[str] = []
+    for result in stage_results.values():
+        paths.extend(history_list(result.get("changed_files"), max_items=200))
+        paths.extend(history_list(result.get("produced_files"), max_items=200))
+    for event in state.get("events", []):
+        if not isinstance(event, dict):
+            continue
+        if event.get("event") in {"commit_start", "commit_created", "commit_amended"}:
+            paths.extend(split_event_paths(event.get("paths")))
+
+    grouped = {"production": [], "tests": [], "harness_artifacts": [], "docs": [], "other": []}
+    for raw_path in paths:
+        path = norm_repo_path(raw_path)
+        if not path or path in {".", "./"}:
+            continue
+        if path.startswith(".ai/docs/"):
+            bucket = "docs"
+        elif path.startswith(".ai/"):
+            bucket = "harness_artifacts"
+        elif is_test_path(path):
+            bucket = "tests"
+        elif is_production_code_path(path):
+            bucket = "production"
+        else:
+            bucket = "other"
+        if path not in grouped[bucket]:
+            grouped[bucket].append(path)
+    return {key: sorted(value) for key, value in grouped.items() if value}
+
+
+def load_history_verification(feature: str, stage_results: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    latest = latest_verification_result_path(feature)
+    if latest.exists():
+        parsed = read_json_file(latest, {})
+        if isinstance(parsed, dict) and parsed:
+            return {
+                "status": parsed.get("status", "UNKNOWN"),
+                "passed": bool(parsed.get("passed")),
+                "failed_commands": parsed.get("failed_commands", []),
+                "commands": [
+                    command.get("name")
+                    for command in parsed.get("commands", [])
+                    if isinstance(command, dict) and command.get("name")
+                ],
+                "source": rel(latest),
+            }
+
+    verify_result = stage_results.get(VERIFY_STAGE, {})
+    summary = verify_result.get("verification_summary")
+    if isinstance(summary, dict):
+        return {
+            "status": summary.get("status", verify_result.get("status", "UNKNOWN")),
+            "passed": str(summary.get("status", "")).upper() == "PASS",
+            "failed_commands": [],
+            "commands": [key for key in summary.keys() if key != "status"],
+            "source": rel(stage_result_json_path(feature, VERIFY_STAGE)),
+        }
+    return {
+        "status": verify_result.get("status", "UNKNOWN"),
+        "passed": str(verify_result.get("status", "")).upper() == "PASS",
+        "failed_commands": [],
+        "commands": [],
+        "source": rel(stage_result_json_path(feature, VERIFY_STAGE))
+        if stage_result_json_path(feature, VERIFY_STAGE).exists()
+        else "",
+    }
+
+
+def collect_history_notes(
+    feature: str,
+    stage_results: dict[str, dict[str, Any]],
+) -> tuple[list[str], list[dict[str, Any]], list[str], list[dict[str, Any]]]:
+    implemented: list[str] = []
+    risks: list[dict[str, Any]] = []
+    future_improvements: list[str] = []
+    decisions: list[dict[str, Any]] = []
+
+    for stage, result in stage_results.items():
+        source = rel(stage_output_path(feature, stage)) if stage_output_path(feature, stage).exists() else ""
+        notes = result.get("history_notes") if isinstance(result.get("history_notes"), dict) else {}
+        implemented.extend(history_list(result.get("implemented")))
+        implemented.extend(history_list(notes.get("implemented") if notes else None))
+        future_improvements.extend(history_list(result.get("future_improvements")))
+        future_improvements.extend(history_list(notes.get("future_improvements") if notes else None))
+
+        for item in history_object_list(result.get("risks"), ["title", "summary", "description", "risk"]) + history_object_list(
+            notes.get("risks") if notes else None,
+            ["title", "summary", "description", "risk"],
+        ):
+            item.setdefault("category", "risk")
+            item["source_stage"] = item.get("source_stage") or stage
+            item["source_artifact"] = item.get("source_artifact") or source
+            risks.append(item)
+        for item in history_object_list(result.get("known_limitations"), ["title", "summary", "description", "risk"]):
+            item.setdefault("category", "known_limitation")
+            item["source_stage"] = item.get("source_stage") or stage
+            item["source_artifact"] = item.get("source_artifact") or source
+            risks.append(item)
+
+        fix_inputs = result.get("fix_inputs")
+        if isinstance(fix_inputs, dict):
+            deferred = history_list(fix_inputs.get("deferred"))
+            future_improvements.extend(deferred)
+            for item in deferred:
+                risks.append(
+                    {
+                        "title": item,
+                        "category": "future_improvement",
+                        "source_stage": stage,
+                        "source_artifact": source,
+                    }
+                )
+
+        for item in history_object_list(result.get("decisions"), ["title", "summary", "description", "decision"]) + history_object_list(
+            notes.get("decisions") if notes else None,
+            ["title", "summary", "description", "decision"],
+        ):
+            item["source_stage"] = item.get("source_stage") or stage
+            item["source_artifact"] = item.get("source_artifact") or source
+            decisions.append(item)
+
+        text = safe_stage_text(feature, stage)
+        implemented.extend(
+            markdown_section_items(
+                text,
+                ["implementation summary", "implemented", "implementation details", "changed files"],
+            )
+        )
+        future_from_text = markdown_section_items(
+            text,
+            ["future", "follow-up", "known limitation", "remaining risk", "deferred"],
+        )
+        future_improvements.extend(future_from_text)
+        for item in future_from_text:
+            risks.append(
+                {
+                    "title": item,
+                    "category": "future_improvement",
+                    "source_stage": stage,
+                    "source_artifact": source,
+                }
+            )
+        for item in markdown_section_items(text, ["decision", "why", "alternative", "plan changed"]):
+            decisions.append({"title": item, "source_stage": stage, "source_artifact": source})
+
+    implemented = list(dict.fromkeys(item for item in implemented if item))
+    future_improvements = list(dict.fromkeys(item for item in future_improvements if item))
+
+    seen_risks: set[str] = set()
+    deduped_risks: list[dict[str, Any]] = []
+    for risk in risks:
+        title = compact_history_text(risk.get("title"))
+        if not title or title in seen_risks:
+            continue
+        seen_risks.add(title)
+        risk["title"] = title
+        deduped_risks.append(risk)
+
+    seen_decisions: set[str] = set()
+    deduped_decisions: list[dict[str, Any]] = []
+    for decision in decisions:
+        title = compact_history_text(decision.get("title"))
+        if not title or title in seen_decisions:
+            continue
+        seen_decisions.add(title)
+        decision["title"] = title
+        deduped_decisions.append(decision)
+
+    return implemented[:40], deduped_risks[:40], future_improvements[:40], deduped_decisions[:40]
+
+
+def normalize_unresolved_source_item(
+    item: Any,
+    *,
+    item_type: str,
+    status: str,
+    disposition: str,
+    source_stage: str,
+    source_artifact: str,
+    default_severity: str = "info",
+) -> dict[str, Any] | None:
+    if isinstance(item, dict):
+        title = compact_history_text(
+            item.get("title")
+            or item.get("summary")
+            or item.get("description")
+            or item.get("finding")
+            or item.get("warning")
+            or item.get("item")
+            or item
+        )
+        reason = compact_history_text(
+            item.get("reason_not_actioned")
+            or item.get("reason")
+            or item.get("rationale")
+            or item.get("rejection_reason")
+            or item.get("defer_reason")
+            or item.get("why")
+        )
+        future_action = compact_history_text(
+            item.get("future_action")
+            or item.get("future_improvement")
+            or item.get("next_action")
+            or item.get("mitigation")
+        )
+        severity = compact_history_text(item.get("severity") or default_severity, max_len=40)
+        item_type = compact_history_text(item.get("type") or item_type, max_len=80)
+        status = compact_history_text(item.get("status") or status, max_len=40)
+        disposition = compact_history_text(item.get("disposition") or disposition, max_len=80)
+        source_stage = compact_history_text(item.get("source_stage") or source_stage, max_len=80)
+        source_artifact = compact_history_text(item.get("source_artifact") or source_artifact, max_len=300)
+    else:
+        title = compact_history_text(item)
+        reason = ""
+        future_action = ""
+        severity = default_severity
+    if not title:
+        return None
+    return {
+        "title": title,
+        "type": item_type,
+        "severity": severity,
+        "status": status,
+        "disposition": disposition,
+        "reason_not_actioned": reason,
+        "future_action": future_action,
+        "source_stage": source_stage,
+        "source_artifact": source_artifact,
+    }
+
+
+def unresolved_items_from_value(
+    value: Any,
+    *,
+    item_type: str,
+    status: str,
+    disposition: str,
+    source_stage: str,
+    source_artifact: str,
+    default_severity: str = "info",
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    if value is None:
+        return items
+    raw_items = value if isinstance(value, list) else [value]
+    for raw_item in raw_items:
+        normalized = normalize_unresolved_source_item(
+            raw_item,
+            item_type=item_type,
+            status=status,
+            disposition=disposition,
+            source_stage=source_stage,
+            source_artifact=source_artifact,
+            default_severity=default_severity,
+        )
+        if normalized and normalized["title"] not in {item["title"] for item in items}:
+            items.append(normalized)
+    return items
+
+
+def collect_history_unresolved_items(
+    feature: str,
+    stage_results: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for stage, result in stage_results.items():
+        source = rel(stage_output_path(feature, stage)) if stage_output_path(feature, stage).exists() else ""
+        notes = result.get("history_notes") if isinstance(result.get("history_notes"), dict) else {}
+
+        items.extend(
+            unresolved_items_from_value(
+                result.get("unresolved_items"),
+                item_type="unresolved_item",
+                status="open",
+                disposition="not_actioned",
+                source_stage=stage,
+                source_artifact=source,
+                default_severity="medium",
+            )
+        )
+        items.extend(
+            unresolved_items_from_value(
+                notes.get("unresolved_items") if notes else None,
+                item_type="unresolved_item",
+                status="open",
+                disposition="not_actioned",
+                source_stage=stage,
+                source_artifact=source,
+                default_severity="medium",
+            )
+        )
+        items.extend(
+            unresolved_items_from_value(
+                result.get("warnings") or result.get("warning"),
+                item_type="warning",
+                status="open",
+                disposition="warning_only",
+                source_stage=stage,
+                source_artifact=source,
+                default_severity="minor",
+            )
+        )
+
+        fix_inputs = result.get("fix_inputs")
+        if isinstance(fix_inputs, dict):
+            items.extend(
+                unresolved_items_from_value(
+                    fix_inputs.get("rejected"),
+                    item_type="review_finding",
+                    status="rejected",
+                    disposition="rejected",
+                    source_stage=stage,
+                    source_artifact=source,
+                    default_severity="minor",
+                )
+            )
+            items.extend(
+                unresolved_items_from_value(
+                    fix_inputs.get("deferred"),
+                    item_type="review_finding",
+                    status="deferred",
+                    disposition="deferred",
+                    source_stage=stage,
+                    source_artifact=source,
+                    default_severity="minor",
+                )
+            )
+            items.extend(
+                unresolved_items_from_value(
+                    fix_inputs.get("warnings"),
+                    item_type="verification_warning",
+                    status="open",
+                    disposition="warning_only",
+                    source_stage=stage,
+                    source_artifact=source,
+                    default_severity="minor",
+                )
+            )
+
+        verification_summary = result.get("verification_summary")
+        if isinstance(verification_summary, dict):
+            notes_value = verification_summary.get("notes") or verification_summary.get("warning")
+            if notes_value and str(result.get("status") or "").upper() == "PASS":
+                items.extend(
+                    unresolved_items_from_value(
+                        notes_value,
+                        item_type="verification_note",
+                        status="accepted",
+                        disposition="pass_with_note",
+                        source_stage=stage,
+                        source_artifact=source,
+                        default_severity="info",
+                    )
+                )
+
+        text = safe_stage_text(feature, stage)
+        for heading_needles, item_type, status, disposition, severity in [
+            (["거부", "rejected", "not accepted"], "review_finding", "rejected", "rejected", "minor"),
+            (["보류", "deferred", "future", "follow-up"], "review_finding", "deferred", "deferred", "minor"),
+            (["warning", "경고"], "warning", "open", "warning_only", "minor"),
+            (["should_consider", "minor", "nit"], "review_suggestion", "open", "not_actioned", "minor"),
+        ]:
+            for item in markdown_section_items(text, heading_needles, max_items=10):
+                normalized = normalize_unresolved_source_item(
+                    item,
+                    item_type=item_type,
+                    status=status,
+                    disposition=disposition,
+                    source_stage=stage,
+                    source_artifact=source,
+                    default_severity=severity,
+                )
+                if normalized:
+                    items.append(normalized)
+
+    seen: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+    for item in items:
+        key = "|".join(
+            [
+                compact_history_text(item.get("title"), max_len=500),
+                compact_history_text(item.get("type"), max_len=80),
+                compact_history_text(item.get("source_stage"), max_len=80),
+            ]
+        )
+        if not key.strip("|") or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped[:80]
+
+
+def stable_history_id(prefix: str, *parts: Any) -> str:
+    raw = "\n".join(compact_history_text(part, max_len=1000) for part in parts)
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+    return f"{prefix}-{digest}"
+
+
+def normalize_history_risk(
+    item: dict[str, Any],
+    *,
+    feature: str,
+    event_id: str,
+    created_at: str,
+    default_severity: str,
+) -> dict[str, Any]:
+    title = compact_history_text(item.get("title") or item.get("summary") or item.get("description"))
+    category = compact_history_text(item.get("category") or "risk", max_len=80)
+    source_artifact = compact_history_text(item.get("source_artifact"), max_len=300)
+    risk_id = compact_history_text(item.get("risk_id"), max_len=120) or stable_history_id(
+        "risk",
+        feature,
+        category,
+        title,
+    )
+    risk = {
+        "risk_id": risk_id,
+        "제목": title,
+        "설명": compact_history_text(item.get("description") or item.get("mitigation") or item.get("future_action") or title),
+        "title": title,
+        "category": category,
+        "severity": compact_history_text(item.get("severity") or default_severity, max_len=40),
+        "status": compact_history_text(item.get("status") or "open", max_len=40),
+        "introduced_by": feature,
+        "last_seen_by": event_id,
+        "source_stage": compact_history_text(item.get("source_stage"), max_len=80),
+        "source_artifacts": [source_artifact] if source_artifact else [],
+        "created_at": created_at,
+        "updated_at": created_at,
+    }
+    return risk
+
+
+def update_history_risks(event: dict[str, Any]) -> list[dict[str, Any]]:
+    existing = read_json_file(history_risks_path(), {"schema_version": HISTORY_SCHEMA_VERSION, "risks": []})
+    if not isinstance(existing, dict):
+        existing = {"schema_version": HISTORY_SCHEMA_VERSION, "risks": []}
+    risks = existing.get("risks")
+    if not isinstance(risks, list):
+        risks = []
+
+    by_id: dict[str, dict[str, Any]] = {
+        str(item.get("risk_id")): item for item in risks if isinstance(item, dict) and item.get("risk_id")
+    }
+    default_severity = compact_history_text(event.get("risk_level") or "medium", max_len=40)
+    for item in event.get("risks", []):
+        if not isinstance(item, dict):
+            continue
+        normalized = normalize_history_risk(
+            item,
+            feature=str(event.get("feature") or ""),
+            event_id=str(event.get("event_id") or ""),
+            created_at=str(event.get("completed_at") or iso_now()),
+            default_severity=default_severity,
+        )
+        risk_id = normalized["risk_id"]
+        if risk_id in by_id:
+            current = by_id[risk_id]
+            current.update(
+                {
+                    "제목": normalized["제목"],
+                    "설명": normalized["설명"],
+                    "title": normalized["title"],
+                    "category": normalized["category"],
+                    "severity": normalized["severity"] or current.get("severity", ""),
+                    "last_seen_by": normalized["last_seen_by"],
+                    "source_stage": normalized["source_stage"],
+                    "updated_at": normalized["updated_at"],
+                }
+            )
+            existing_sources = current.get("source_artifacts")
+            if not isinstance(existing_sources, list):
+                existing_sources = []
+            for source in normalized["source_artifacts"]:
+                if source not in existing_sources:
+                    existing_sources.append(source)
+            current["source_artifacts"] = existing_sources
+            if not current.get("status"):
+                current["status"] = "open"
+        else:
+            by_id[risk_id] = normalized
+
+    updated = sorted(by_id.values(), key=lambda item: (str(item.get("status")), str(item.get("updated_at")), str(item.get("risk_id"))))
+    write_json_file(history_risks_path(), {"schema_version": HISTORY_SCHEMA_VERSION, "risks": updated})
+    return updated
+
+
+def normalize_history_unresolved_item(
+    item: dict[str, Any],
+    *,
+    feature: str,
+    event_id: str,
+    created_at: str,
+) -> dict[str, Any]:
+    title = compact_history_text(item.get("title") or item.get("summary") or item.get("description"))
+    item_type = compact_history_text(item.get("type") or "unresolved_item", max_len=80)
+    source_stage = compact_history_text(item.get("source_stage"), max_len=80)
+    source_artifact = compact_history_text(item.get("source_artifact"), max_len=300)
+    item_id = compact_history_text(item.get("item_id"), max_len=120) or stable_history_id(
+        "item",
+        feature,
+        item_type,
+        source_stage,
+        title,
+    )
+    return {
+        "item_id": item_id,
+        "제목": title,
+        "설명": compact_history_text(
+            item.get("description")
+            or item.get("reason_not_actioned")
+            or item.get("future_action")
+            or title
+        ),
+        "feature": feature,
+        "type": item_type,
+        "severity": compact_history_text(item.get("severity") or "minor", max_len=40),
+        "status": compact_history_text(item.get("status") or "open", max_len=40),
+        "disposition": compact_history_text(item.get("disposition") or "not_actioned", max_len=80),
+        "title": title,
+        "reason_not_actioned": compact_history_text(item.get("reason_not_actioned")),
+        "future_action": compact_history_text(item.get("future_action")),
+        "source_stage": source_stage,
+        "source_artifact": source_artifact,
+        "introduced_by": feature,
+        "last_seen_by": event_id,
+        "created_at": created_at,
+        "updated_at": created_at,
+    }
+
+
+def update_history_unresolved_items(event: dict[str, Any]) -> list[dict[str, Any]]:
+    existing = read_json_file(
+        history_unresolved_items_path(),
+        {"schema_version": HISTORY_SCHEMA_VERSION, "items": []},
+    )
+    if not isinstance(existing, dict):
+        existing = {"schema_version": HISTORY_SCHEMA_VERSION, "items": []}
+    items = existing.get("items")
+    if not isinstance(items, list):
+        items = []
+
+    by_id: dict[str, dict[str, Any]] = {
+        str(item.get("item_id")): item for item in items if isinstance(item, dict) and item.get("item_id")
+    }
+    for item in event.get("unresolved_items", []):
+        if not isinstance(item, dict):
+            continue
+        normalized = normalize_history_unresolved_item(
+            item,
+            feature=str(event.get("feature") or ""),
+            event_id=str(event.get("event_id") or ""),
+            created_at=str(event.get("completed_at") or iso_now()),
+        )
+        item_id = normalized["item_id"]
+        if item_id in by_id:
+            current = by_id[item_id]
+            created_at = current.get("created_at") or normalized["created_at"]
+            current.update(normalized)
+            current["created_at"] = created_at
+        else:
+            by_id[item_id] = normalized
+
+    active_order = {"open": "0", "deferred": "1", "accepted": "2", "rejected": "3", "closed": "4"}
+    updated = sorted(
+        by_id.values(),
+        key=lambda item: (
+            active_order.get(str(item.get("status") or "").lower(), "9"),
+            str(item.get("updated_at")),
+            str(item.get("item_id")),
+        ),
+    )
+    write_json_file(
+        history_unresolved_items_path(),
+        {"schema_version": HISTORY_SCHEMA_VERSION, "items": updated},
+    )
+    return updated
+
+
+def append_history_decisions(event: dict[str, Any]) -> list[dict[str, Any]]:
+    appended: list[dict[str, Any]] = []
+    completed_at = str(event.get("completed_at") or iso_now())
+    for raw in event.get("decisions", []):
+        if not isinstance(raw, dict):
+            continue
+        title = compact_history_text(raw.get("title"))
+        if not title:
+            continue
+        decision = {
+            "schema_version": HISTORY_SCHEMA_VERSION,
+            "decision_id": compact_history_text(raw.get("decision_id"), max_len=120)
+            or stable_history_id("decision", event.get("feature"), title),
+            "제목": title,
+            "설명": compact_history_text(raw.get("reason") or title),
+            "feature": event.get("feature"),
+            "event_id": event.get("event_id"),
+            "title": title,
+            "reason": compact_history_text(raw.get("reason")),
+            "source_stage": compact_history_text(raw.get("source_stage"), max_len=80),
+            "source_artifact": compact_history_text(raw.get("source_artifact"), max_len=300),
+            "created_at": completed_at,
+        }
+        if append_jsonl_if_missing(history_decisions_path(), decision, "decision_id"):
+            appended.append(decision)
+    return appended
+
+
+def update_history_feature_summary(event: dict[str, Any]) -> dict[str, Any]:
+    feature = str(event.get("feature") or "")
+    path = history_features_dir() / f"{feature}.json"
+    existing = read_json_file(path, {})
+    if not isinstance(existing, dict):
+        existing = {}
+
+    event_id = str(event.get("event_id") or "")
+    event_ids = existing.get("event_ids")
+    if not isinstance(event_ids, list):
+        event_ids = []
+    if event_id and event_id not in event_ids:
+        event_ids.append(event_id)
+
+    runs = existing.get("runs")
+    if not isinstance(runs, list):
+        runs = []
+    if event_id and not any(isinstance(item, dict) and item.get("event_id") == event_id for item in runs):
+        runs.append(
+            {
+                "event_id": event_id,
+                "status": event.get("status"),
+                "pipeline": event.get("pipeline"),
+                "completed_at": event.get("completed_at"),
+                "commits": event.get("commits", {}),
+                "verification": event.get("verification", {}),
+            }
+        )
+
+    summary = {
+        "schema_version": HISTORY_SCHEMA_VERSION,
+        "제목": f"{feature} 기능 요약",
+        "설명": compact_history_text(event.get("request_summary"), max_len=800),
+        "feature": feature,
+        "first_seen_at": existing.get("first_seen_at") or event.get("completed_at"),
+        "last_completed_at": event.get("completed_at"),
+        "latest_event_id": event_id,
+        "event_ids": event_ids,
+        "request_summary": event.get("request_summary", ""),
+        "latest_status": event.get("status", ""),
+        "latest_pipeline": event.get("pipeline", ""),
+        "implemented": event.get("implemented", []),
+        "future_improvements": event.get("future_improvements", []),
+        "unresolved_items": event.get("unresolved_items", []),
+        "changed_files": event.get("changed_files", {}),
+        "commits": event.get("commits", {}),
+        "source_artifacts": event.get("source_artifacts", []),
+        "runs": runs[-20:],
+        "updated_at": iso_now(),
+    }
+    write_json_file(path, summary)
+    return summary
+
+
+def render_history_summary(
+    events: list[dict[str, Any]],
+    risks: list[dict[str, Any]],
+    unresolved_items: list[dict[str, Any]],
+) -> None:
+    complete_events = [event for event in events if event.get("event_type") == "run_completed"]
+    open_risks = [risk for risk in risks if str(risk.get("status") or "open").lower() == "open"]
+    active_unresolved = [
+        item
+        for item in unresolved_items
+        if str(item.get("status") or "open").lower() in {"open", "deferred"}
+    ]
+    lines = [
+        "# 프로젝트 히스토리",
+        "",
+        "로컬 하네스가 자동 생성한 장기 기록 요약입니다.",
+        "",
+        f"- 기록된 run: {len(complete_events)}",
+        f"- 열린 리스크 / 미래 개선점: {len(open_risks)}",
+        f"- 열린/보류 미해결 항목: {len(active_unresolved)}",
+        "",
+        "## 최근 완료 Run",
+        "",
+    ]
+    if not complete_events:
+        lines.append("- 없음")
+    for event in complete_events[-20:][::-1]:
+        verification = event.get("verification") if isinstance(event.get("verification"), dict) else {}
+        lines.append(
+            "- "
+            f"{event.get('completed_at', '')} "
+            f"{event.get('feature', '')} "
+            f"({event.get('pipeline', '')}, {event.get('status', '')}, verify={verification.get('status', 'UNKNOWN')})"
+        )
+        implemented = event.get("implemented") if isinstance(event.get("implemented"), list) else []
+        for item in implemented[:3]:
+            lines.append(f"  - {item}")
+    lines.extend(["", "## 열린 리스크와 후속 개선점", ""])
+    if not open_risks:
+        lines.append("- 없음")
+    for risk in sorted(open_risks, key=lambda item: str(item.get("updated_at")), reverse=True)[:30]:
+        lines.append(
+            "- "
+            f"[{risk.get('severity', 'medium')}] "
+            f"{risk.get('title', '')} "
+            f"(from {risk.get('introduced_by', '')})"
+        )
+    lines.extend(["", "## 미해결 리뷰/검증 항목", ""])
+    if not active_unresolved:
+        lines.append("- 없음")
+    for item in sorted(active_unresolved, key=lambda item: str(item.get("updated_at")), reverse=True)[:30]:
+        lines.append(
+            "- "
+            f"[{item.get('status', 'open')}/{item.get('severity', 'minor')}] "
+            f"{item.get('title', '')} "
+            f"(from {item.get('feature', '')}:{item.get('source_stage', '')})"
+        )
+    history_summary_path().write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+
+def record_project_history(state: dict[str, Any]) -> dict[str, Any]:
+    initialized = ensure_history_store()
+    feature = str(state["feature_name"])
+    stage_results = load_history_stage_results(feature)
+    implemented, risks, future_improvements, decisions = collect_history_notes(feature, stage_results)
+    unresolved_items = collect_history_unresolved_items(feature, stage_results)
+    changed_files = collect_history_changed_files(state, stage_results)
+    verification = load_history_verification(feature, stage_results)
+    completed_at = iso_now()
+    event_id = history_event_id(state)
+    risk_levels = [
+        compact_history_text(result.get("risk_level"), max_len=40)
+        for result in stage_results.values()
+        if result.get("risk_level")
+    ]
+    risk_level = risk_levels[-1] if risk_levels else ""
+
+    event = {
+        "schema_version": HISTORY_SCHEMA_VERSION,
+        "event_type": "run_completed",
+        "event_id": event_id,
+        "제목": f"{feature} 기능 개발 기록",
+        "설명": compact_history_text(state.get("request"), max_len=800),
+        "history_initialized": initialized,
+        "feature": feature,
+        "pipeline": state.get("pipeline_mode") or PIPELINE_MODE,
+        "status": state.get("status"),
+        "created_at": state.get("created_at"),
+        "completed_at": completed_at,
+        "request_summary": compact_history_text(state.get("request"), max_len=800),
+        "implemented": implemented,
+        "changed_files": changed_files,
+        "verification": verification,
+        "risk_level": risk_level,
+        "risks": risks,
+        "future_improvements": future_improvements,
+        "unresolved_items": unresolved_items,
+        "decisions": decisions,
+        "commits": state.get("commits", {}),
+        "source_artifacts": history_source_artifacts(feature),
+    }
+
+    appended = append_jsonl_if_missing(history_events_path(), event, "event_id")
+    update_history_feature_summary(event)
+    updated_risks = update_history_risks(event)
+    updated_unresolved_items = update_history_unresolved_items(event)
+    appended_decisions = append_history_decisions(event)
+    render_history_summary(iter_jsonl(history_events_path()), updated_risks, updated_unresolved_items)
+
+    state["history"] = {
+        "schema_version": HISTORY_SCHEMA_VERSION,
+        "event_id": event_id,
+        "events": rel(history_events_path()),
+        "feature_summary": rel(history_features_dir() / f"{feature}.json"),
+        "risks": rel(history_risks_path()),
+        "unresolved_items": rel(history_unresolved_items_path()),
+        "decisions": rel(history_decisions_path()),
+        "summary": rel(history_summary_path()),
+        "status": "recorded" if appended else "already_recorded",
+        "recorded_at": completed_at,
+        "decisions_appended": len(appended_decisions),
+    }
+    return state["history"]
+
+
 def log_event(
     state: dict[str, Any],
     event: str,
@@ -1346,6 +2449,7 @@ Required JSON keys:
 - blocking_reason: string, use "" when there is no blocker
 
 Include any extra stage fields that the preset asks for, such as `risk_level`, `harness_commit_required`, `changed_files`, `verification_summary`, or `fix_inputs`.
+For PASS or FAIL stages, also include `history_notes` with these arrays when known: `implemented`, `risks`, `future_improvements`, `decisions`, and `unresolved_items`. Use empty arrays for categories with nothing to record. Prefer Korean text for human-facing titles, descriptions, reasons, risks, and decisions when the project context is Korean.
 
 ## Original User Request
 {state.get("request", "")}
@@ -2489,6 +3593,26 @@ def resume_run(feature: str, max_verify_fix_retries: int = DEFAULT_MAX_VERIFY_FI
         state["status"] = "complete"
         state["current_stage"] = "done"
         log_event(state, "complete", "run complete", stage=stage)
+        save_state(state)
+        try:
+            history_result = record_project_history(state)
+        except Exception as exc:
+            log_event(
+                state,
+                "history_failed",
+                f"project history update failed: {exc}",
+                stage=stage,
+            )
+        else:
+            log_event(
+                state,
+                "history_recorded",
+                "project history updated",
+                stage=stage,
+                status=history_result.get("status"),
+                event_id=history_result.get("event_id"),
+                events=history_result.get("events"),
+            )
         save_state(state)
         return state
 
