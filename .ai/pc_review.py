@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
+import os
 import sys
 import threading
 from datetime import datetime
@@ -11,10 +13,55 @@ from pathlib import Path
 import harness as base
 
 
-DEFAULT_AGENT = "codex"
+DEFAULT_AGENT = "agy"
 AGENT_CHOICES = ("codex", "claude", "agy")
 REVIEW_TIMEOUT_SECONDS = 3600
 PROGRESS_INTERVAL_SECONDS = 15
+COLOR_RESET = "\033[0m"
+COLOR_DIM = "\033[2m"
+COLOR_BOLD = "\033[1m"
+COLOR_BLUE = "\033[34m"
+COLOR_CYAN = "\033[36m"
+COLOR_GREEN = "\033[32m"
+COLOR_MAGENTA = "\033[35m"
+COLOR_RED = "\033[31m"
+COLOR_YELLOW = "\033[33m"
+
+
+def _enable_windows_ansi() -> None:
+    if os.name != "nt":
+        return
+    try:
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-11)
+        mode = ctypes.c_uint32()
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return
+        kernel32.SetConsoleMode(handle, mode.value | 0x0004)
+    except Exception:
+        return
+
+
+_enable_windows_ansi()
+
+
+def _color_enabled() -> bool:
+    return not os.environ.get("NO_COLOR") and sys.stdout.isatty()
+
+
+def _style(text: str, *codes: str) -> str:
+    if not _color_enabled() or not codes:
+        return text
+    return "".join(codes) + text + COLOR_RESET
+
+
+def _print_rule(title: str, color: str = COLOR_CYAN) -> None:
+    line = f"========== {title} =========="
+    print(_style(line, COLOR_BOLD, color), flush=True)
+
+
+def _print_kv(label: str, value: object, color: str = COLOR_CYAN) -> None:
+    print(f"{_style(label + ':', COLOR_BOLD, color)} {value}", flush=True)
 
 
 def _read_text(path: Path) -> str:
@@ -96,11 +143,23 @@ Do not ask the user any questions. The Python script will ask the user after sho
 """
 
 
-def build_apply_prompt(candidate: dict, contract_text: str, review_text: str, agent: str) -> str:
-    contract_path = base.project_contract_path()
-    return f"""# Apply Approved Project Contract Candidate
+def _approved_payload(decisions: list[dict]) -> str:
+    payload = [
+        {
+            "candidate": item["candidate"],
+            "review_text": item["review_text"],
+            "user_decision": item["status"],
+        }
+        for item in decisions
+    ]
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
-The user approved this single Project Contract candidate after reading the {agent} review below.
+
+def build_apply_prompt(decisions: list[dict], contract_text: str, agent: str) -> str:
+    contract_path = base.project_contract_path()
+    return f"""# Apply Approved Project Contract Candidates
+
+The user approved the Project Contract candidates listed below after reading the {agent} reviews.
 
 You must now edit `.ai/project_contract.md` directly in the repository.
 
@@ -113,38 +172,34 @@ Forbidden:
 - Do not run git commands.
 
 ## Apply Rules
-1. Add the approved rule to `.ai/project_contract.md` under the most appropriate section.
-2. If a suitable section already exists, add a short bullet there.
-3. If no suitable section exists, create a short section with a clear heading.
-4. Do not duplicate an existing Project Contract rule. If the rule is already covered, leave the file unchanged and print that it was already covered.
-5. Keep `.ai/project_contract.md` short and rule-focused. Do not add evidence or long rationale there.
+1. Apply all approved candidates in one pass.
+2. Add each approved rule to `.ai/project_contract.md` under the most appropriate section.
+3. If a suitable section already exists, add a short bullet there.
+4. If no suitable section exists, create a short section with a clear heading.
+5. Do not duplicate existing Project Contract rules. If a rule is already covered, leave that rule unchanged and mention it in the summary.
+6. Keep `.ai/project_contract.md` short and rule-focused. Do not add evidence or long rationale there.
 
 ## Current Approved Project Contract
 ```markdown
 {contract_text}
 ```
 
-## Approved Candidate
+## Approved Candidates And Reviews
 ```json
-{_candidate_summary(candidate)}
+{_approved_payload(decisions)}
 ```
 
-## Review Text Shown To User
-```text
-{review_text}
-```
-
-After editing, print a concise Korean summary of exactly what changed. If no file change was needed because the rule was already covered, say so clearly.
+After editing, print a concise Korean summary of exactly what changed for each approved candidate. If no file change was needed because every rule was already covered, say so clearly.
 """
 
 
 def _progress_until_done(stop: threading.Event, label: str) -> None:
     while not stop.wait(PROGRESS_INTERVAL_SECONDS):
-        print(f"[{_now_label()}] {label} 진행 중...", flush=True)
+        print(_style(f"[{_now_label()}] {label} 진행 중...", COLOR_DIM, COLOR_BLUE), flush=True)
 
 
 def run_agent(agent: str, prompt: str, prefix: str, label: str) -> dict:
-    print(f"[{_now_label()}] {label} 시작 (agent={agent})", flush=True)
+    print(_style(f"[{_now_label()}] {label} 시작 (agent={agent})", COLOR_BOLD, COLOR_BLUE), flush=True)
     stop = threading.Event()
     heartbeat = threading.Thread(target=_progress_until_done, args=(stop, label), daemon=True)
     heartbeat.start()
@@ -162,8 +217,11 @@ def run_agent(agent: str, prompt: str, prefix: str, label: str) -> dict:
         heartbeat.join(timeout=1)
 
     print(
-        f"[{_now_label()}] {label} 완료 "
-        f"(stdout={result.get('stdout')} stderr={result.get('stderr')})",
+        _style(
+            f"[{_now_label()}] {label} 완료 "
+            f"(stdout={result.get('stdout')} stderr={result.get('stderr')})",
+            COLOR_GREEN,
+        ),
         flush=True,
     )
     if result.get("returncode") != 0 or result.get("timed_out"):
@@ -176,12 +234,12 @@ def run_agent(agent: str, prompt: str, prefix: str, label: str) -> dict:
 
 def ask_yes_no(prompt: str) -> bool:
     while True:
-        answer = input(prompt).strip().lower()
+        answer = input(_style(prompt, COLOR_BOLD, COLOR_YELLOW)).strip().lower()
         if answer in {"yes", "y"}:
             return True
         if answer in {"no", "n"}:
             return False
-        print("Yes 또는 No로 답해주세요. 예: y / n")
+        print(_style("Yes 또는 No로 답해주세요. 예: y / n", COLOR_RED))
 
 
 def update_candidate_decision(candidate_id: str, status: str, reason: str) -> None:
@@ -200,15 +258,15 @@ def update_candidate_decision(candidate_id: str, status: str, reason: str) -> No
 
 def display_candidate(candidate: dict, index: int, total: int) -> None:
     print()
-    print(f"========== PC 후보 {index}/{total} ==========")
-    print(f"id: {candidate.get('id')}")
-    print(f"category: {candidate.get('category') or '-'}")
-    print(f"recommended_section: {candidate.get('recommended_contract_section') or '-'}")
-    print(f"rule_candidate: {candidate.get('rule_candidate') or '-'}")
+    _print_rule(f"PC 후보 {index}/{total}", COLOR_MAGENTA)
+    _print_kv("id", candidate.get("id"), COLOR_MAGENTA)
+    _print_kv("category", candidate.get("category") or "-", COLOR_MAGENTA)
+    _print_kv("recommended_section", candidate.get("recommended_contract_section") or "-", COLOR_MAGENTA)
+    _print_kv("rule_candidate", candidate.get("rule_candidate") or "-", COLOR_MAGENTA)
     rationale = str(candidate.get("rationale") or "").strip()
     if rationale:
-        print(f"rationale: {rationale}")
-    print("====================================")
+        _print_kv("rationale", rationale, COLOR_MAGENTA)
+    print(_style("====================================", COLOR_MAGENTA))
 
 
 def validate_after_apply() -> list[dict]:
@@ -259,8 +317,10 @@ def main(argv: list[str] | None = None) -> int:
     contract_path = base.project_contract_path()
     protected = [candidates_path, contract_path]
 
-    print(f"미정 PC 후보 {len(pending)}개를 {agent}가 후보별로 검토합니다.")
-    print("각 후보마다 Yes=승인, No=기각으로 하나씩 처리합니다.")
+    print(_style(f"미정 PC 후보 {len(pending)}개를 {agent}가 후보별로 검토합니다.", COLOR_BOLD, COLOR_CYAN))
+    print(_style("각 후보마다 agent 검토 후 사용자 결정을 보관하고, 승인된 후보는 마지막에 한 번에 Project Contract에 반영합니다.", COLOR_CYAN))
+
+    decisions: list[dict] = []
 
     for index, candidate in enumerate(pending, start=1):
         candidate_id = str(candidate.get("id") or "")
@@ -287,29 +347,39 @@ def main(argv: list[str] | None = None) -> int:
 
         review_text = str(review.get("stdout_text") or "").strip()
         print()
-        print(f"========== {agent} PC 후보 검토 ==========")
+        _print_rule(f"{agent} PC 후보 검토", COLOR_CYAN)
         print(review_text or f"({agent}가 검토 내용을 출력하지 않았습니다.)")
-        print("========================================")
+        print(_style("========================================", COLOR_CYAN))
         print()
 
         approved = ask_yes_no("이 후보를 Project Contract에 승인할까요? (Yes=승인 / No=기각): ")
-        if not approved:
-            update_candidate_decision(
-                candidate_id,
-                base.PC_REJECTED_STATUS,
-                f"사용자가 pc_review에서 승인하지 않아 기각함. {agent} 검토 요약: {_review_excerpt(review_text)}",
-            )
-            print(f"[{_now_label()}] {candidate_id} 기각 처리 완료")
-            continue
+        status = base.PC_APPROVED_STATUS if approved else base.PC_REJECTED_STATUS
+        decisions.append(
+            {
+                "candidate": candidate,
+                "candidate_id": candidate_id,
+                "review_text": review_text,
+                "status": status,
+            }
+        )
+        status_color = COLOR_GREEN if approved else COLOR_RED
+        print(_style(f"[{_now_label()}] {candidate_id} 결정 보관: {status}", COLOR_BOLD, status_color))
 
+    approved_decisions = [item for item in decisions if item["status"] == base.PC_APPROVED_STATUS]
+    rejected_decisions = [item for item in decisions if item["status"] == base.PC_REJECTED_STATUS]
+
+    print()
+    _print_rule("PC 결정 요약", COLOR_YELLOW)
+    print(_style(f"승인: {len(approved_decisions)}개 / 기각: {len(rejected_decisions)}개", COLOR_BOLD, COLOR_YELLOW))
+
+    if approved_decisions:
         before_apply = _snapshot(protected)
         apply_result = run_agent(
             agent,
-            build_apply_prompt(candidate, _read_text(contract_path), review_text, agent),
-            f"pc_apply_{candidate_id}",
-            f"PC 후보 {index}/{len(pending)} contract 반영",
+            build_apply_prompt(approved_decisions, _read_text(contract_path), agent),
+            "pc_apply_batch",
+            f"승인된 PC 후보 {len(approved_decisions)}개 contract 일괄 반영",
         )
-
         if _read_text(candidates_path) != before_apply[candidates_path]:
             candidates_path.write_text(before_apply[candidates_path], encoding="utf-8")
             print(f"[{_now_label()}] agent가 변경한 후보 JSON은 복원했고, 상태는 Python이 기록합니다.")
@@ -317,16 +387,29 @@ def main(argv: list[str] | None = None) -> int:
         apply_text = str(apply_result.get("stdout_text") or "").strip()
         if apply_text:
             print()
-            print(f"========== {agent} 적용 결과 ==========")
+            _print_rule(f"{agent} 일괄 적용 결과", COLOR_GREEN)
             print(apply_text)
-            print("=====================================")
+            print(_style("=====================================", COLOR_GREEN))
+    else:
+        print(_style("승인된 후보가 없어 Project Contract 파일 반영 단계는 건너뜁니다.", COLOR_YELLOW))
 
-        update_candidate_decision(
-            candidate_id,
-            base.PC_APPROVED_STATUS,
-            f"사용자가 pc_review에서 승인했고 {agent}가 Project Contract 반영을 수행함. 검토 요약: {_review_excerpt(review_text)}",
-        )
-        print(f"[{_now_label()}] {candidate_id} 승인 처리 완료")
+    for item in decisions:
+        candidate_id = item["candidate_id"]
+        review_text = item["review_text"]
+        status = item["status"]
+        if status == base.PC_APPROVED_STATUS:
+            reason = (
+                f"사용자가 pc_review에서 승인했고 {agent}가 Project Contract 일괄 반영을 수행함. "
+                f"검토 요약: {_review_excerpt(review_text)}"
+            )
+        else:
+            reason = (
+                f"사용자가 pc_review에서 승인하지 않아 기각함. "
+                f"{agent} 검토 요약: {_review_excerpt(review_text)}"
+            )
+        update_candidate_decision(candidate_id, status, reason)
+        status_color = COLOR_GREEN if status == base.PC_APPROVED_STATUS else COLOR_RED
+        print(_style(f"[{_now_label()}] {candidate_id} {status} 상태 기록 완료", status_color))
 
     remaining = validate_after_apply()
     print()

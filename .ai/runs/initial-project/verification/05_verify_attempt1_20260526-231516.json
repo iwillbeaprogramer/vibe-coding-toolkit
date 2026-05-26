@@ -1,0 +1,53 @@
+{
+  "feature_name": "initial-project",
+  "stage": "05_verify",
+  "attempt": 1,
+  "result_path": ".ai/runs/initial-project/verification/05_verify_attempt1_20260526-231516.json",
+  "latest_path": ".ai/runs/initial-project/verification/latest.json",
+  "started_at": "2026-05-26T23:15:16",
+  "finished_at": "2026-05-26T23:15:16",
+  "required": true,
+  "passed": true,
+  "status": "PASS",
+  "commands": [
+    {
+      "name": "harness-python-compile",
+      "command": [
+        "python",
+        "-m",
+        "py_compile",
+        ".ai\\harness.py",
+        ".ai\\harness_fast.py",
+        ".ai\\harness_standard.py",
+        ".ai\\templates\\docx_helper.py"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 600,
+      "returncode": 0,
+      "elapsed_seconds": 0.16,
+      "passed": true,
+      "timed_out": false,
+      "stdout": ".ai/runs/initial-project/verification/05_verify_attempt1_harness-python-compile.out.txt",
+      "stderr": ".ai/runs/initial-project/verification/05_verify_attempt1_harness-python-compile.err.txt"
+    },
+    {
+      "name": "git-diff-check",
+      "command": [
+        "git",
+        "-c",
+        "safe.directory=D:\\WorkingDirectories\\vibe-test\\vibe-coding-toolkit",
+        "diff",
+        "--check"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 600,
+      "returncode": 0,
+      "elapsed_seconds": 0.1,
+      "passed": true,
+      "timed_out": false,
+      "stdout": ".ai/runs/initial-project/verification/05_verify_attempt1_git-diff-check.out.txt",
+      "stderr": ".ai/runs/initial-project/verification/05_verify_attempt1_git-diff-check.err.txt"
+    }
+  ],
+  "failed_commands": []
+}
