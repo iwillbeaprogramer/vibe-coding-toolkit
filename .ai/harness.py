@@ -464,18 +464,82 @@ def is_harness_internal_path(path: str, feature: str) -> bool:
 
 
 SNAPSHOT_GENERATED_DIR_NAMES = {
+    ".cache",
+    ".gradle",
     ".git",
+    ".idea",
+    ".mypy_cache",
+    ".next",
+    ".nox",
+    ".nuxt",
+    ".parcel-cache",
     ".pytest_cache",
+    ".ruff_cache",
+    ".svelte-kit",
+    ".tox",
+    ".turbo",
     ".venv",
+    ".vite",
+    ".vs",
+    ".vscode",
+    ".vstest",
     "__pycache__",
+    "artifacts",
+    "bin",
+    "build",
+    "coverage",
     "dist",
+    "env",
+    "htmlcov",
+    "log",
+    "logs",
     "node_modules",
+    "obj",
+    "out",
+    "packages",
+    "target",
+    "temp",
+    "TestResults",
+    "tmp",
+    "vendor",
     "venv",
 }
 
+SNAPSHOT_GENERATED_DIR_SUFFIXES = {
+    ".egg-info",
+}
+
+SNAPSHOT_GENERATED_FILE_NAMES = {
+    ".coverage",
+    ".DS_Store",
+    "desktop.ini",
+    "Thumbs.db",
+}
+
 SNAPSHOT_GENERATED_FILE_SUFFIXES = {
+    ".AssemblyAttributes.cs",
+    ".AssemblyInfoInputs.cache",
+    ".assets.cache",
+    ".cache",
+    ".coverage",
+    ".coveragexml",
+    ".designer.deps.json",
+    ".designer.runtimeconfig.json",
+    ".dtbcache.v2",
+    ".GeneratedMSBuildEditorConfig.editorconfig",
+    ".g.cs",
+    ".g.i.cs",
+    ".log",
+    ".map",
+    ".pyd",
     ".pyc",
     ".pyo",
+    ".suo",
+    ".tmp",
+    ".trx",
+    ".user",
+    ".vsidx",
+    "_MarkupCompile.i.cache",
 }
 
 
@@ -483,6 +547,10 @@ def is_snapshot_generated_path(path: str) -> bool:
     path = norm_repo_path(path)
     parts = [part for part in path.split("/") if part]
     if any(part in SNAPSHOT_GENERATED_DIR_NAMES for part in parts):
+        return True
+    if any(any(part.endswith(suffix) for suffix in SNAPSHOT_GENERATED_DIR_SUFFIXES) for part in parts):
+        return True
+    if parts and parts[-1] in SNAPSHOT_GENERATED_FILE_NAMES:
         return True
     return any(path.endswith(suffix) for suffix in SNAPSHOT_GENERATED_FILE_SUFFIXES)
 
