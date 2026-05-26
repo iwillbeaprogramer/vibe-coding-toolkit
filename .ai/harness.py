@@ -22,9 +22,16 @@ RUNS_DIR = AI_DIR / "runs"
 FEATURES_DIR = AI_DIR / "features"
 DOCS_DIR = AI_DIR / "docs"
 HISTORY_DIR = AI_DIR / "history"
+PROJECT_CONTRACT_PATH = AI_DIR / "project_contract.md"
+PC_CANDIDATES_PATH = HISTORY_DIR / "pc_candidates.json"
 PRESETS_DIR = ROOT / "presets" / "full"
 PIPELINE_MODE = "full"
 HISTORY_SCHEMA_VERSION = 1
+PC_CANDIDATES_SCHEMA_VERSION = 1
+PC_PENDING_STATUS = "미정"
+PC_APPROVED_STATUS = "승인"
+PC_REJECTED_STATUS = "기각"
+PC_REVIEW_STAGE = "pc_candidates"
 
 STAGES = [
     "00_specify",
@@ -750,6 +757,82 @@ def redact_prompt_command(command: list[str], prompt_text: str | None) -> list[s
     return ["<prompt>" if part == prompt_text else part.replace(prompt_text, "<prompt>") for part in command]
 
 
+def run_text_provider_prompt(
+    provider: str,
+    prompt_text: str,
+    *,
+    logs_dir: Path,
+    log_prefix: str,
+    timeout_seconds: int = 3600,
+    performance: Any | None = None,
+) -> dict[str, Any]:
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    stamp = now_stamp()
+    safe_prefix = re.sub(r"[^a-zA-Z0-9_.-]+", "-", log_prefix).strip("-") or "provider"
+    stdout_path = logs_dir / f"{safe_prefix}_{provider}_{stamp}.out.txt"
+    stderr_path = logs_dir / f"{safe_prefix}_{provider}_{stamp}.err.txt"
+    meta_path = logs_dir / f"{safe_prefix}_{provider}_{stamp}.json"
+    cli_log_path = logs_dir / f"{safe_prefix}_{provider}_{stamp}.cli.log"
+
+    command, prompt_in_command = prepare_provider_command(
+        provider,
+        prompt_text,
+        log_file=cli_log_path.resolve(),
+        performance=performance,
+    )
+    executable = resolve_executable(command)
+    if not executable:
+        raise HarnessError(f"Provider executable not found for {provider}: {command[0]}")
+
+    started = time.time()
+    try:
+        proc = subprocess.run(
+            command,
+            cwd=ROOT,
+            input=None if prompt_in_command else prompt_text,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout_seconds,
+            check=False,
+        )
+        elapsed = round(time.time() - started, 2)
+        stdout_text = proc.stdout or ""
+        stderr_text = proc.stderr or ""
+        timed_out = False
+        returncode = proc.returncode
+    except subprocess.TimeoutExpired as exc:
+        elapsed = round(time.time() - started, 2)
+        stdout_text = exc.stdout or ""
+        stderr_text = exc.stderr or ""
+        if isinstance(stdout_text, bytes):
+            stdout_text = stdout_text.decode("utf-8", errors="replace")
+        if isinstance(stderr_text, bytes):
+            stderr_text = stderr_text.decode("utf-8", errors="replace")
+        stderr_text = str(stderr_text) + f"\nTimed out after {timeout_seconds} seconds.\n"
+        timed_out = True
+        returncode = None
+
+    stdout_path.write_text(str(stdout_text), encoding="utf-8")
+    stderr_path.write_text(str(stderr_text), encoding="utf-8")
+    result = {
+        "provider": provider,
+        "command": redact_prompt_command(command, prompt_text),
+        "returncode": returncode,
+        "timed_out": timed_out,
+        "elapsed_seconds": elapsed,
+        "stdout": rel(stdout_path),
+        "stderr": rel(stderr_path),
+        "meta": rel(meta_path),
+        "provider_log": rel(cli_log_path),
+        "finished_at": iso_now(),
+    }
+    meta_path.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return result | {"stdout_text": str(stdout_text), "stderr_text": str(stderr_text)}
+
+
 def expand_runtime_placeholders(value: Any, feature: str) -> str:
     return (
         str(value)
@@ -911,6 +994,14 @@ def history_summary_path() -> Path:
     return HISTORY_DIR / "summary.md"
 
 
+def pc_candidates_path() -> Path:
+    return PC_CANDIDATES_PATH
+
+
+def project_contract_path() -> Path:
+    return PROJECT_CONTRACT_PATH
+
+
 def write_json_file(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(value, ensure_ascii=False, indent=4) + "\n"
@@ -926,6 +1017,124 @@ def read_json_file(path: Path, default: Any) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return default
+
+
+def empty_pc_candidates_store() -> dict[str, Any]:
+    return {"version": PC_CANDIDATES_SCHEMA_VERSION, "candidates": []}
+
+
+def read_pc_candidates_store() -> dict[str, Any]:
+    path = pc_candidates_path()
+    if not path.exists():
+        return empty_pc_candidates_store()
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HarnessError(f"Invalid PC candidates JSON: {rel(path)}: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise HarnessError(f"PC candidates file must be a JSON object: {rel(path)}")
+    candidates = parsed.get("candidates", [])
+    if not isinstance(candidates, list):
+        raise HarnessError(f"PC candidates file must contain a candidates list: {rel(path)}")
+    parsed["version"] = parsed.get("version") or PC_CANDIDATES_SCHEMA_VERSION
+    parsed["candidates"] = [item for item in candidates if isinstance(item, dict)]
+    return parsed
+
+
+def write_pc_candidates_store(store: dict[str, Any]) -> None:
+    candidates = store.get("candidates", [])
+    if not isinstance(candidates, list):
+        candidates = []
+    write_json_file(
+        pc_candidates_path(),
+        {
+            "version": store.get("version") or PC_CANDIDATES_SCHEMA_VERSION,
+            "candidates": candidates,
+        },
+    )
+
+
+def pending_pc_candidates() -> list[dict[str, Any]]:
+    store = read_pc_candidates_store()
+    return [
+        item
+        for item in store.get("candidates", [])
+        if str(item.get("status") or "").strip() == PC_PENDING_STATUS
+    ]
+
+
+def ensure_project_contract_file() -> None:
+    path = project_contract_path()
+    if path.exists():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "# Project Contract\n\n"
+        "## Hard Rules\n"
+        "- 모델은 Git commit, amend, reset, checkout, rebase, push를 직접 실행하지 않는다.\n"
+        "- 기존 테스트를 삭제하거나 비활성화하지 않는다.\n"
+        "- 요청 범위를 벗어난 리팩터링, 의존성 추가, 파일 이동은 하지 않는다.\n"
+        "\n"
+        "## Code Style\n"
+        "- 새 코드는 같은 디렉터리의 기존 패턴, 네이밍, 파일 구조를 우선 따른다.\n"
+        "- 프로젝트에 이미 명확한 네이밍 관례가 없으면 변수와 함수는 camelCase를 기본으로 한다.\n"
+        "- 함수 이름은 가능하면 동사 또는 동사구로 시작한다. 예: `loadConfig`, `validateInput`, `renderItem`.\n"
+        "- Boolean 값과 Boolean 반환 함수는 `is`, `has`, `can`, `should` 같은 의미 있는 접두사를 사용한다.\n"
+        "- 이벤트 핸들러는 `handle` 또는 기존 프로젝트의 이벤트 네이밍 패턴을 따른다.\n"
+        "- 값을 변환하는 함수는 `to`, `from`, `parse`, `format`, `normalize`처럼 변환 의도가 드러나는 이름을 사용한다.\n"
+        "- 데이터를 가져오는 함수는 `get`, `load`, `fetch`, `read` 중 실제 동작에 맞는 동사를 사용한다.\n"
+        "- 부수효과가 있는 함수는 `save`, `write`, `update`, `delete`, `send`, `create`처럼 변경 의도가 드러나는 동사를 사용한다.\n"
+        "- 구현이 30줄을 넘어가면 함수나 작은 단위로 분리한다.\n"
+        "\n"
+        "## Reliability\n"
+        "- 외부 입력, 파일, 네트워크, 프로세스 실행 결과는 실패 가능성을 명시적으로 처리한다.\n",
+        encoding="utf-8",
+    )
+
+
+def project_contract_prompt_text() -> str:
+    path = project_contract_path()
+    if not path.exists():
+        return (
+            "## Project Contract\n"
+            "No approved project contract exists yet. Follow the existing codebase conventions.\n"
+        )
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        return (
+            "## Project Contract\n"
+            "No approved project contract exists yet. Follow the existing codebase conventions.\n"
+        )
+    return f"## Project Contract\nSource: {rel(path)}\n\n{text}\n"
+
+
+def assert_no_pending_pc_candidates_for_new_run() -> None:
+    pending = pending_pc_candidates()
+    if not pending:
+        return
+    lines = [
+        color_text("새 파이프라인을 시작할 수 없습니다.", "red", "bold"),
+        "",
+        (
+            "미정 상태의 Project Contract 후보가 "
+            f"{color_text(str(len(pending)), 'yellow', 'bold')}개 있습니다."
+        ),
+        "먼저 후보를 승인 또는 기각해야 합니다.",
+        "",
+        color_text("확인 및 정산:", "green", "bold"),
+        "  python .ai\\pc_review.py",
+        "",
+        color_text("미정 후보:", "yellow", "bold"),
+    ]
+    for item in pending[:20]:
+        lines.append(
+            "  - "
+            f"{item.get('id', '-')}: "
+            f"{compact_history_text(item.get('rule_candidate') or item.get('summary'), max_len=160)}"
+        )
+    if len(pending) > 20:
+        lines.append(f"  - ... and {len(pending) - 20} more")
+    raise HarnessError("\n".join(lines))
 
 
 def history_collection_key(path: Path) -> str:
@@ -986,6 +1195,9 @@ def ensure_history_store() -> bool:
             history_unresolved_items_path(),
             {"schema_version": HISTORY_SCHEMA_VERSION, "items": []},
         )
+        initialized = True
+    if not pc_candidates_path().exists():
+        write_pc_candidates_store(empty_pc_candidates_store())
         initialized = True
     if not history_summary_path().exists():
         history_summary_path().write_text(
@@ -1980,6 +2192,296 @@ def record_project_history(state: dict[str, Any]) -> dict[str, Any]:
     return state["history"]
 
 
+def should_extract_pc_candidates(state: dict[str, Any]) -> bool:
+    return str(state.get("pipeline_mode") or PIPELINE_MODE) in {"standard", "full"}
+
+
+def pc_candidate_source_artifact_text(feature: str, max_chars_per_file: int = 8000) -> str:
+    blocks: list[str] = []
+    for artifact in history_source_artifacts(feature):
+        path = ROOT / artifact
+        if not path.exists() or not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if len(text) > max_chars_per_file:
+            text = text[:max_chars_per_file] + "\n...[truncated]"
+        blocks.extend([f"### {artifact}", "```text", text, "```", ""])
+    return "\n".join(blocks).strip() or "- none"
+
+
+def build_pc_candidate_extraction_prompt(state: dict[str, Any]) -> str:
+    feature = str(state["feature_name"])
+    stage_results = load_history_stage_results(feature)
+    changed_files = collect_history_changed_files(state, stage_results)
+    verification = load_history_verification(feature, stage_results)
+    current_contract = project_contract_prompt_text()
+    artifacts_text = pc_candidate_source_artifact_text(feature)
+    existing_store = read_pc_candidates_store()
+    existing_rule_candidates = [
+        compact_history_text(item.get("rule_candidate"), max_len=240)
+        for item in existing_store.get("candidates", [])
+        if item.get("rule_candidate")
+    ][-50:]
+
+    return f"""# Project Contract Candidate Extraction
+
+You are extracting Project Contract candidates after a completed local AI development pipeline.
+
+This is not a normal feature implementation task.
+Do not edit files. Return only a JSON object.
+
+## Goal
+Find rules that should become candidates for the long-term Project Contract.
+The Project Contract is observational: it is based on conventions and decisions that emerged from real development.
+
+## Pipeline Context
+- feature_name: {feature}
+- pipeline_mode: {state.get("pipeline_mode") or PIPELINE_MODE}
+- request: {state.get("request", "")}
+- completed_at: {iso_now()}
+
+## Current Approved Project Contract
+{current_contract}
+
+## Existing Candidate Summaries
+{json.dumps(existing_rule_candidates, ensure_ascii=False, indent=2)}
+
+## Changed Files Summary
+{json.dumps(changed_files, ensure_ascii=False, indent=2)}
+
+## Harness Verification
+{json.dumps(verification, ensure_ascii=False, indent=2)}
+
+## Source Artifacts
+{artifacts_text}
+
+## Candidate Criteria
+Create a candidate only when the rule is likely to affect future feature development.
+
+Good candidates:
+- naming, architecture, state management, error handling, testing, UX, data flow, dependency policy
+- a convention or decision likely to recur in later features
+- a rule that extends or clarifies the existing Project Contract
+- a conflict with the existing Project Contract that needs explicit decision
+
+Do not create candidates for:
+- one-off implementation details
+- obvious bug fixes
+- temporary code
+- rules already clearly covered by the current Project Contract
+- weak observations with no future impact
+
+## Output Contract
+Return exactly one JSON object. Do not wrap it in Markdown.
+
+Schema:
+{{
+  "candidates": [
+    {{
+      "category": "architecture | naming | ux | testing | error_handling | data | dependency | other",
+      "rule_candidate": "A concise Korean rule phrased as something future work should do.",
+      "rationale": "Why this should be considered as a project-level rule.",
+      "evidence": ["Relevant files, artifacts, or decisions."],
+      "recommended_contract_section": "Hard Rules | Architecture | Naming | UX | Testing | Error Handling | Data | Dependencies | Other"
+    }}
+  ]
+}}
+
+If there are no worthwhile candidates, return {{"candidates": []}}.
+"""
+
+
+def normalize_pc_candidate(raw: dict[str, Any], state: dict[str, Any], created_at: str) -> dict[str, Any] | None:
+    rule = compact_history_text(raw.get("rule_candidate") or raw.get("summary"), max_len=600)
+    if not rule:
+        return None
+    category = compact_history_text(raw.get("category") or "other", max_len=80) or "other"
+    feature = str(state["feature_name"])
+    candidate_id = stable_history_id("pc", feature, category, rule)
+    evidence = history_list(raw.get("evidence"), max_items=40)
+    return {
+        "id": candidate_id,
+        "status": PC_PENDING_STATUS,
+        "source_feature": feature,
+        "source_pipeline": state.get("pipeline_mode") or PIPELINE_MODE,
+        "source_run_created_at": state.get("created_at", ""),
+        "source_artifacts": history_source_artifacts(feature),
+        "category": category,
+        "rule_candidate": rule,
+        "rationale": compact_history_text(raw.get("rationale"), max_len=1000),
+        "evidence": evidence,
+        "recommended_contract_section": compact_history_text(
+            raw.get("recommended_contract_section"),
+            max_len=120,
+        ),
+        "created_at": created_at,
+        "decided_at": "",
+        "decision_reason": "",
+        "extraction_model": "claude",
+    }
+
+
+def append_pc_candidates(candidates: list[dict[str, Any]], state: dict[str, Any]) -> dict[str, Any]:
+    store = read_pc_candidates_store()
+    existing_ids = {
+        str(item.get("id"))
+        for item in store.get("candidates", [])
+        if str(item.get("id") or "")
+    }
+    added: list[dict[str, Any]] = []
+    for candidate in candidates:
+        candidate_id = str(candidate.get("id") or "")
+        if not candidate_id or candidate_id in existing_ids:
+            continue
+        store.setdefault("candidates", []).append(candidate)
+        existing_ids.add(candidate_id)
+        added.append(candidate)
+    if added:
+        write_pc_candidates_store(store)
+    return {
+        "status": "recorded",
+        "path": rel(pc_candidates_path()),
+        "added_count": len(added),
+        "added_ids": [item["id"] for item in added],
+    }
+
+
+def extract_project_contract_candidates(state: dict[str, Any]) -> dict[str, Any]:
+    if not should_extract_pc_candidates(state):
+        return {"status": "skipped", "reason": "pipeline does not extract PC candidates"}
+
+    feature = str(state["feature_name"])
+    prompt = build_pc_candidate_extraction_prompt(state)
+    log_event(
+        state,
+        "pc_candidate_extraction_started",
+        "extracting project contract candidates",
+        stage=PC_REVIEW_STAGE,
+    )
+    result = run_text_provider_prompt(
+        "claude",
+        prompt,
+        logs_dir=run_dir(feature) / "logs",
+        log_prefix="pc_candidates",
+        timeout_seconds=3600,
+        performance=state.get("performance"),
+    )
+    if result.get("returncode") != 0 or result.get("timed_out"):
+        raise HarnessError(
+            "PC candidate extraction provider failed. "
+            f"stdout={result.get('stdout')} stderr={result.get('stderr')}"
+        )
+
+    parsed = parse_result_json_from_text(str(result.get("stdout_text") or ""))
+    raw_candidates = parsed.get("candidates") if isinstance(parsed, dict) else None
+    if raw_candidates is None:
+        raise HarnessError(
+            "PC candidate extraction did not return a JSON object with a candidates list. "
+            f"stdout={result.get('stdout')}"
+        )
+    if not isinstance(raw_candidates, list):
+        raise HarnessError("PC candidate extraction field 'candidates' must be a list.")
+
+    created_at = iso_now()
+    normalized = [
+        candidate
+        for candidate in (
+            normalize_pc_candidate(item, state, created_at)
+            for item in raw_candidates
+            if isinstance(item, dict)
+        )
+        if candidate
+    ]
+    append_result = append_pc_candidates(normalized, state)
+    extraction = {
+        "status": "PASS",
+        "provider": "claude",
+        "candidate_count": len(normalized),
+        "recorded_count": append_result["added_count"],
+        "candidate_ids": append_result["added_ids"],
+        "candidates_path": append_result["path"],
+        "stdout": result.get("stdout"),
+        "stderr": result.get("stderr"),
+        "meta": result.get("meta"),
+    }
+    state["pc_candidate_extraction"] = extraction
+    log_event(
+        state,
+        "pc_candidate_extraction_completed",
+        "project contract candidates extracted",
+        stage=PC_REVIEW_STAGE,
+        candidate_count=len(normalized),
+        recorded_count=append_result["added_count"],
+    )
+    return extraction
+
+
+def complete_run(state: dict[str, Any], stage: str) -> dict[str, Any]:
+    state["status"] = "complete"
+    state["current_stage"] = "done"
+    state.pop("blocked", None)
+    log_event(state, "complete", "run complete", stage=stage)
+    save_state(state)
+    try:
+        history_result = record_project_history(state)
+    except Exception as exc:
+        log_event(
+            state,
+            "history_failed",
+            f"project history update failed: {exc}",
+            stage=stage,
+        )
+    else:
+        log_event(
+            state,
+            "history_recorded",
+            "project history updated",
+            stage=stage,
+            status=history_result.get("status"),
+            event_id=history_result.get("event_id"),
+            events=history_result.get("events"),
+        )
+    save_state(state)
+    return state
+
+
+def finish_pc_candidate_extraction(state: dict[str, Any]) -> dict[str, Any]:
+    source_stage = str(state.get("pc_candidate_source_stage") or VERIFY_STAGE)
+    try:
+        extraction = extract_project_contract_candidates(state)
+    except Exception as exc:
+        state["status"] = "blocked"
+        state["current_stage"] = PC_REVIEW_STAGE
+        state["blocked"] = {
+            "stage": PC_REVIEW_STAGE,
+            "reason": f"PC candidate extraction failed: {exc}",
+            "next_stage": PC_REVIEW_STAGE,
+        }
+        write_handoff(
+            state,
+            str(state["blocked"]["reason"]),
+            stage=PC_REVIEW_STAGE,
+            next_action="PC 후보 추출 실패 원인을 확인한 뒤 resume으로 다시 시도하세요.",
+        )
+        log_event(
+            state,
+            "pc_candidate_extraction_failed",
+            str(exc),
+            stage=PC_REVIEW_STAGE,
+        )
+        save_state(state)
+        return state
+
+    state["pc_candidate_extraction"] = extraction
+    state.pop("blocked", None)
+    state.pop("pc_candidate_source_stage", None)
+    save_state(state)
+    return complete_run(state, source_stage)
+
+
 def log_event(
     state: dict[str, Any],
     event: str,
@@ -2407,6 +2909,8 @@ def generate_prompt(state: dict[str, Any], stage: str, retry_context: str | None
         if latest_verify_path.exists():
             additional_inputs.append(f"- {rel(latest_verify_path)}")
 
+    project_contract = project_contract_prompt_text()
+
     instruction = f"""# Local Harness Prompt
 
 ## Harness Context
@@ -2450,6 +2954,8 @@ Required JSON keys:
 
 Include any extra stage fields that the preset asks for, such as `risk_level`, `harness_commit_required`, `changed_files`, `verification_summary`, or `fix_inputs`.
 For PASS or FAIL stages, also include `history_notes` with these arrays when known: `implemented`, `risks`, `future_improvements`, `decisions`, and `unresolved_items`. Use empty arrays for categories with nothing to record. Prefer Korean text for human-facing titles, descriptions, reasons, risks, and decisions when the project context is Korean.
+
+{project_contract}
 
 ## Original User Request
 {state.get("request", "")}
@@ -3088,6 +3594,7 @@ def create_run(
     defaults_mode: bool = False,
     performance: Any | None = None,
 ) -> dict[str, Any]:
+    assert_no_pending_pc_candidates_for_new_run()
     assert_no_unpushed_commits_for_new_run()
     assert_no_incomplete_runs_for_new_run()
     ensure_dirs()
@@ -3493,6 +4000,8 @@ def resume_run(feature: str, max_verify_fix_retries: int = DEFAULT_MAX_VERIFY_FI
     if max_verify_fix_retries < 0:
         raise HarnessError("max_verify_fix_retries must be zero or greater.")
     stage = state["current_stage"]
+    if stage == PC_REVIEW_STAGE:
+        return finish_pc_candidate_extraction(state)
     if stage not in STAGES:
         raise HarnessError(f"Unknown current stage: {stage}")
 
@@ -3590,31 +4099,19 @@ def resume_run(feature: str, max_verify_fix_retries: int = DEFAULT_MAX_VERIFY_FI
         return state
 
     if (DOCUMENT_STAGE and stage == DOCUMENT_STAGE) or next_stage == "done":
-        state["status"] = "complete"
-        state["current_stage"] = "done"
-        log_event(state, "complete", "run complete", stage=stage)
-        save_state(state)
-        try:
-            history_result = record_project_history(state)
-        except Exception as exc:
+        if should_extract_pc_candidates(state):
+            state["status"] = "pc_candidates_pending"
+            state["current_stage"] = PC_REVIEW_STAGE
+            state["pc_candidate_source_stage"] = stage
             log_event(
                 state,
-                "history_failed",
-                f"project history update failed: {exc}",
+                "pc_candidate_extraction_queued",
+                "queued project contract candidate extraction",
                 stage=stage,
             )
-        else:
-            log_event(
-                state,
-                "history_recorded",
-                "project history updated",
-                stage=stage,
-                status=history_result.get("status"),
-                event_id=history_result.get("event_id"),
-                events=history_result.get("events"),
-            )
-        save_state(state)
-        return state
+            save_state(state)
+            return finish_pc_candidate_extraction(state)
+        return complete_run(state, stage)
 
     if next_stage not in STAGES:
         raise HarnessError(f"Invalid next_stage: {next_stage}")

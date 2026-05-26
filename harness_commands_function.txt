@@ -198,3 +198,20 @@ python .ai\harness.py cleanup function --keep-feature
 Remove the run state and generated feature files:
 
 python .ai\harness.py cleanup function
+
+
+Project Contract candidate review
+=================================
+
+Standard and full pipelines extract Project Contract candidates after completion.
+
+If any candidate is still pending (`미정`), all new fast/standard/full runs are blocked.
+
+Review pending candidates with Claude:
+
+python .ai\pc_review.py
+
+This script takes no arguments. Claude reads .ai\history\pc_candidates.json and .ai\project_contract.md, proposes approve/reject/ambiguous decisions, and asks for a Yes/No response.
+
+If you answer Yes, Claude updates .ai\history\pc_candidates.json and .ai\project_contract.md.
+If you answer No, no files are changed and pending candidates remain.
