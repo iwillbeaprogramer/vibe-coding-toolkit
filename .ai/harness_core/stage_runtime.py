@@ -297,6 +297,31 @@ def _provider_log_hint(stdout_path: Path, stderr_path: Path, provider_log_path: 
     )
 
 
+def _log_tail(path: Path, lines: int = 2, max_chars: int = 500) -> str | None:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    tail_lines = [line.strip() for line in text.splitlines() if line.strip()][-lines:]
+    if not tail_lines:
+        return None
+    tail = " | ".join(tail_lines)
+    if len(tail) > max_chars:
+        return tail[: max_chars - 3] + "..."
+    return tail
+
+
+def _provider_output_tails(stdout_path: Path, stderr_path: Path) -> dict[str, str]:
+    tails: dict[str, str] = {}
+    stdout_tail = _log_tail(stdout_path)
+    stderr_tail = _log_tail(stderr_path)
+    if stdout_tail:
+        tails["stdout_tail"] = stdout_tail
+    if stderr_tail:
+        tails["stderr_tail"] = stderr_tail
+    return tails
+
+
 def _provider_failure_reason(
     state: dict[str, Any],
     *,
@@ -426,6 +451,7 @@ def _execute_current_prompt(state: dict[str, Any], timeout_seconds: int) -> dict
                     provider_log=rel(cli_log_path),
                     retry_command=suggested_retry_command(state),
                     elapsed_seconds=elapsed,
+                    **provider_output_tails(stdout_path, stderr_path),
                 )
                 save_state(state)
                 return state
@@ -527,6 +553,7 @@ def _execute_current_prompt(state: dict[str, Any], timeout_seconds: int) -> dict
             provider_log=rel(cli_log_path),
             retry_command=suggested_retry_command(state),
             elapsed_seconds=elapsed,
+            **provider_output_tails(stdout_path, stderr_path),
         )
         save_state(state)
         return state
@@ -607,6 +634,8 @@ _INTERNAL_NAMES = {
     'harness_script_for_pipeline_mode': _harness_script_for_pipeline_mode,
     'suggested_retry_command': _suggested_retry_command,
     'provider_log_hint': _provider_log_hint,
+    'log_tail': _log_tail,
+    'provider_output_tails': _provider_output_tails,
     'provider_failure_reason': _provider_failure_reason,
     'execute_current_prompt': _execute_current_prompt,
 }
@@ -677,6 +706,14 @@ def suggested_retry_command(ctx: dict[str, Any], *args: Any, **kwargs: Any) -> A
 
 def provider_log_hint(ctx: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
     return _with_ctx(ctx, _provider_log_hint, *args, **kwargs)
+
+
+def log_tail(ctx: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
+    return _with_ctx(ctx, _log_tail, *args, **kwargs)
+
+
+def provider_output_tails(ctx: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
+    return _with_ctx(ctx, _provider_output_tails, *args, **kwargs)
 
 
 def provider_failure_reason(ctx: dict[str, Any], *args: Any, **kwargs: Any) -> Any:

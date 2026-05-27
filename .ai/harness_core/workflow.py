@@ -631,6 +631,27 @@ def _block_state(state: dict[str, Any], stage: str, reason: str, next_stage: str
     save_state(state)
 
 
+def _failed_verification_checks(result: dict[str, Any]) -> str | None:
+    checks: list[str] = []
+    verification_summary = result.get("verification_summary")
+    if isinstance(verification_summary, dict):
+        commands = verification_summary.get("commands")
+        if isinstance(commands, list):
+            for command in commands:
+                if not isinstance(command, dict):
+                    continue
+                status = str(command.get("status", "")).strip().upper()
+                if status != "FAIL":
+                    continue
+                name = str(command.get("name") or command.get("command") or "").strip()
+                summary = str(command.get("summary") or "").strip()
+                if name and summary:
+                    checks.append(f"{name}: {summary}")
+                elif name:
+                    checks.append(name)
+    return "; ".join(checks) if checks else None
+
+
 def _resume_run(feature: str, max_verify_fix_retries: int = DEFAULT_MAX_VERIFY_FIX_RETRIES) -> dict[str, Any]:
     state = load_state(feature)
     if max_verify_fix_retries < 0:
@@ -730,6 +751,8 @@ def _resume_run(feature: str, max_verify_fix_retries: int = DEFAULT_MAX_VERIFY_F
             "verify_failed_returning_to_development",
             f"returning to {VERIFY_RETRY_TARGET_STAGE} after failed verify",
             stage=stage,
+            blocking_reason=result.get("blocking_reason") or "Verify stage failed.",
+            failed_checks=failed_verification_checks(result),
         )
         generate_prompt(state, VERIFY_RETRY_TARGET_STAGE)
         return state
@@ -949,6 +972,7 @@ _INTERNAL_NAMES = {
     'expected_docx_path': _expected_docx_path,
     'validate_document_stage_artifacts': _validate_document_stage_artifacts,
     'block_state': _block_state,
+    'failed_verification_checks': _failed_verification_checks,
     'resume_run': _resume_run,
     'approve_run': _approve_run,
     'build_retry_context': _build_retry_context,
@@ -1055,6 +1079,10 @@ def validate_document_stage_artifacts(ctx: dict[str, Any], *args: Any, **kwargs:
 
 def block_state(ctx: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
     return _with_ctx(ctx, _block_state, *args, **kwargs)
+
+
+def failed_verification_checks(ctx: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
+    return _with_ctx(ctx, _failed_verification_checks, *args, **kwargs)
 
 
 def resume_run(ctx: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
