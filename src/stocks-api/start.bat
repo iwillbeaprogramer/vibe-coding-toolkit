@@ -24,19 +24,19 @@ if exist "%~dp0.venv\Scripts\activate.bat" (
 )
 
 if defined VENV_ACTIVATE (
-    echo [start.bat] 가상환경 활성화: %VENV_ACTIVATE%
+    echo [start.bat] Activating virtual env: %VENV_ACTIVATE%
     call "%VENV_ACTIVATE%"
 ) else (
-    echo [start.bat] 가상환경을 찾지 못했습니다. 시스템 전역 python 을 사용합니다.
+    echo [start.bat] No virtual env found. Using system python.
 )
 
-echo [start.bat] python main.py 실행
+echo [start.bat] Running python main.py
 python main.py
 set "EXIT_CODE=%ERRORLEVEL%"
 
 if not "%EXIT_CODE%"=="0" (
     echo.
-    echo [start.bat] 서버가 비정상 종료되었습니다. exit_code=%EXIT_CODE%
+    echo [start.bat] Server exited abnormally. exit_code=%EXIT_CODE%
     pause
 )
 
