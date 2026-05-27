@@ -1170,12 +1170,8 @@ def ensure_project_contract_file() -> None:
 
 
 def project_contract_prompt_text() -> str:
+    ensure_project_contract_file()
     path = project_contract_path()
-    if not path.exists():
-        return (
-            "## Project Contract\n"
-            "No approved project contract exists yet. Follow the existing codebase conventions.\n"
-        )
     text = path.read_text(encoding="utf-8").strip()
     if not text:
         return (
@@ -2966,6 +2962,7 @@ def generate_prompt(state: dict[str, Any], stage: str, retry_context: str | None
     preset_text = raw.replace("[기능명]", feature)
     output = stage_output_path(feature, stage)
     result_json = stage_result_json_path(feature, stage)
+    ensure_project_contract_file()
     state.setdefault("stage_file_snapshots", {})[stage] = file_policy_snapshot(feature)
     defaults_mode = bool(state.get("defaults_mode"))
     decision_policy = (
