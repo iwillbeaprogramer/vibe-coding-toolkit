@@ -1,4 +1,65 @@
 {
+  "providers": {
+    "claude": {
+      "enabled": true
+    },
+    "codex": {
+      "enabled": true
+    },
+    "agy": {
+      "enabled": true
+    }
+  },
+  "model_policy": {
+    "min_distinct_agents": 2,
+    "no_adjacent_same_provider": true,
+    "on_independence_violation": "block",
+    "code_write_allowed": [
+      "claude",
+      "codex"
+    ],
+    "code_write_denied": [
+      "agy"
+    ],
+    "code_write_order": [
+      "claude",
+      "codex"
+    ],
+    "non_code_order": [
+      "agy",
+      "codex",
+      "claude"
+    ],
+    "role_orders": {
+      "plan": [
+        "agy",
+        "codex",
+        "claude"
+      ],
+      "review": [
+        "agy",
+        "codex",
+        "claude"
+      ],
+      "verify": [
+        "codex",
+        "agy",
+        "claude"
+      ],
+      "document": [
+        "agy",
+        "codex",
+        "claude"
+      ],
+      "pc_extract": [
+        "claude",
+        "codex",
+        "agy"
+      ]
+    },
+    "avoid_reusing_recent_code_writer_for_review": true,
+    "reserve_code_writers_for_code_stages": true
+  },
   "verification": {
     "enabled": true,
     "required": true,

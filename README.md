@@ -40,7 +40,7 @@ python .ai\harness_standard.py doctor --deep
 python .ai\harness.py doctor --deep
 ```
 
-`doctor --deep`는 Codex, Claude, Antigravity CLI를 실제로 호출하므로 일반 `doctor`보다 오래 걸릴 수 있습니다.
+`doctor`는 provider 실행 가능 여부와 자동 배정 preview를 함께 보여줍니다. `doctor --deep`는 Codex, Claude, Antigravity CLI를 실제로 호출하므로 일반 `doctor`보다 오래 걸릴 수 있습니다.
 
 ### 2. 가장 흔한 실행 명령
 
@@ -94,7 +94,7 @@ presets/full/
 .ai/harness_fast.py       fast 파이프라인 진입점
 .ai/harness_standard.py   standard 파이프라인 진입점
 .ai/harness.py            full 파이프라인 및 공통 하네스 구현
-.ai/harness.config.json   하네스 검증 명령 설정
+.ai/harness.config.json   하네스 검증 명령과 모델 배정 정책 설정
 .ai/templates/            문서 생성 등 보조 템플릿
 ```
 
@@ -157,7 +157,7 @@ python .ai\harness_fast.py ...
 - 빠른 프로토타입
 - 리뷰 단계를 별도로 오래 돌릴 필요가 없는 작업
 
-권장 모델:
+기본 권장 모델:
 
 ```text
 00_specify : Antigravity
@@ -187,7 +187,7 @@ python .ai\harness_standard.py ...
 - 여러 파일을 건드리는 변경
 - 대부분의 일상 개발
 
-권장 모델:
+기본 권장 모델:
 
 ```text
 00_specify : Codex
@@ -219,7 +219,7 @@ python .ai\harness.py ...
 - 장기 유지보수 관점에서 상세 기록이 필요한 기능
 - API 계약, 데이터 흐름, 구조 변경이 포함된 작업
 
-권장 모델:
+기본 권장 모델:
 
 ```text
 00_specify : Codex
@@ -229,6 +229,18 @@ python .ai\harness.py ...
 04_fix     : Claude
 05_verify  : Codex
 06_document: Antigravity
+```
+
+실제 실행 provider는 preset 값만으로 고정되지 않습니다. 하네스는 `.ai/harness.config.json`의 `model_policy`와 현재 사용 가능한 CLI를 보고 stage별 provider를 자동 배정합니다.
+
+기본 정책:
+
+```text
+- 최소 2개 이상의 provider가 실행 가능해야 함
+- 인접 stage는 가능한 한 같은 provider를 쓰지 않음
+- develop/fix 같은 코드 작성 stage는 Claude 우선, 불가하면 Codex
+- Antigravity는 코드 작성 stage에 배정하지 않음
+- 독립성 제약을 지킬 수 없으면 조용히 진행하지 않고 blocked 처리
 ```
 
 ---
@@ -634,6 +646,43 @@ NEEDS_USER  사용자 판단 필요
 
 ---
 
+## 모델 배정 정책
+
+기본값만으로도 동작하지만, 필요하면 `.ai/harness.config.json`에 `model_policy`를 추가해 provider 배정 방식을 조정할 수 있습니다.
+
+예:
+
+```json
+{
+  "providers": {
+    "claude": { "enabled": true },
+    "codex": { "enabled": true },
+    "agy": { "enabled": true }
+  },
+  "model_policy": {
+    "min_distinct_agents": 2,
+    "no_adjacent_same_provider": true,
+    "on_independence_violation": "block",
+    "code_write_allowed": ["claude", "codex"],
+    "code_write_denied": ["agy"],
+    "code_write_order": ["claude", "codex"],
+    "non_code_order": ["agy", "codex", "claude"]
+  }
+}
+```
+
+설정 파일에는 stage별 provider를 직접 박아두지 않는 것을 권장합니다. 사용자는 provider의 사용 가능 여부와 정책만 선언하고, 하네스가 실행 시점에 전체 stage 배정을 계산합니다.
+
+`provider_schedule`은 run 상태에 저장됩니다.
+
+```text
+.ai/runs/<feature>/run.json
+```
+
+이미 생성된 run은 저장된 schedule을 우선 사용하므로, 실행 중에 provider가 조용히 바뀌지 않습니다.
+
+---
+
 ## 검증 정책
 
 하네스 검증 명령은 `.ai/harness.config.json`에 있습니다.
@@ -748,7 +797,9 @@ forbidden_writes:
 
 ### provider 실행 실패
 
-provider CLI가 실패하거나 타임아웃이 나면 run은 blocked 됩니다.
+provider CLI가 실패하거나 타임아웃이 나면 run은 blocked 됩니다. 이미 provider가 실행된 뒤에는 파일 변경 가능성이 있으므로, 하네스는 다른 provider로 조용히 이어서 실행하지 않습니다.
+
+provider가 실행 전부터 사용할 수 없는 상태라면 모델 배정 단계에서 가능한 다른 provider를 선택합니다. 단, 독립성 제약이나 코드 작성 provider 제약을 만족할 수 없으면 blocked 됩니다.
 
 확인:
 

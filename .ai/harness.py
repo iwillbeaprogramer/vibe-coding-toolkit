@@ -74,6 +74,7 @@ PROVIDER_BY_MODEL = {
     "Claude": "claude",
     "Antigravity": "agy",
 }
+PROVIDERS = ("codex", "claude", "agy")
 
 DEFAULT_PROVIDER_COMMANDS = {
     "codex": [
@@ -109,6 +110,31 @@ DEFAULT_PROVIDER_COMMANDS = {
 
 DEFAULT_PERFORMANCE = "medium"
 
+DEFAULT_PROVIDER_CAPABILITIES = {
+    "codex": ["plan", "code_write", "review", "verify", "document", "pc_extract"],
+    "claude": ["plan", "code_write", "review", "verify", "document", "pc_extract"],
+    "agy": ["plan", "review", "verify", "document", "pc_extract"],
+}
+
+DEFAULT_MODEL_POLICY = {
+    "min_distinct_agents": 2,
+    "no_adjacent_same_provider": True,
+    "on_independence_violation": "block",
+    "code_write_allowed": ["claude", "codex"],
+    "code_write_denied": ["agy"],
+    "code_write_order": ["claude", "codex"],
+    "non_code_order": ["agy", "codex", "claude"],
+    "role_orders": {
+        "plan": ["agy", "codex", "claude"],
+        "review": ["agy", "codex", "claude"],
+        "verify": ["codex", "agy", "claude"],
+        "document": ["agy", "codex", "claude"],
+        "pc_extract": ["claude", "codex", "agy"],
+    },
+    "avoid_reusing_recent_code_writer_for_review": True,
+    "reserve_code_writers_for_code_stages": True,
+}
+
 PERFORMANCE_PROFILES = {
     "high": {
         "codex": {
@@ -120,7 +146,7 @@ PERFORMANCE_PROFILES = {
             "effort": "xhigh",
         },
         "agy": {
-            "model": "Gemini 3.5 Flash (High)",
+            "model": "agy-high",
         },
     },
     "medium": {
@@ -133,7 +159,7 @@ PERFORMANCE_PROFILES = {
             "effort": "high",
         },
         "agy": {
-            "model": "Gemini 3.5 Flash (High)",
+            "model": "agy-medium",
         },
     },
     "lite": {
@@ -146,7 +172,7 @@ PERFORMANCE_PROFILES = {
             "effort": "high",
         },
         "agy": {
-            "model": "Gemini 3.5 Flash (Medium)",
+            "model": "agy-lite",
         },
     },
 }
@@ -971,7 +997,9 @@ def configured_verification_commands(feature: str) -> tuple[list[dict[str, Any]]
     return commands, required
 
 
-def provider_for_stage(stage: str) -> str:
+def preset_provider_for_stage(stage: str) -> str | None:
+    if stage == PC_REVIEW_STAGE:
+        return None
     meta, _, _ = read_preset(stage)
     preferred = str(meta.get("preferred_model", ""))
     provider = PROVIDER_BY_MODEL.get(preferred)
@@ -984,6 +1012,307 @@ def resolve_executable(command: list[str]) -> str | None:
     if not command:
         return None
     return shutil.which(command[0])
+
+
+def merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = merge_dicts(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def model_policy() -> dict[str, Any]:
+    config = load_config()
+    raw = config.get("model_policy", {})
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise HarnessError("model_policy config must be an object.")
+    return merge_dicts(DEFAULT_MODEL_POLICY, raw)
+
+
+def ordered_unique(values: list[str] | tuple[str, ...]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        item = str(value).strip().lower()
+        if item and item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
+
+
+def known_provider_names() -> list[str]:
+    config = load_config()
+    configured = []
+    providers = config.get("providers", {})
+    if isinstance(providers, dict):
+        configured = [str(provider) for provider in providers]
+    return ordered_unique([*PROVIDERS, *configured])
+
+
+def provider_config(provider: str) -> dict[str, Any]:
+    config = load_config()
+    providers = config.get("providers", {})
+    if not isinstance(providers, dict):
+        return {}
+    provider_config = providers.get(provider, {})
+    return provider_config if isinstance(provider_config, dict) else {}
+
+
+def provider_enabled(provider: str) -> bool:
+    return provider_config(provider).get("enabled", True) is not False
+
+
+def provider_capabilities(provider: str) -> set[str]:
+    configured = provider_config(provider).get("capabilities")
+    if isinstance(configured, list):
+        return {str(item).strip() for item in configured if str(item).strip()}
+    return set(DEFAULT_PROVIDER_CAPABILITIES.get(provider, []))
+
+
+def provider_available(provider: str) -> bool:
+    if not provider_enabled(provider):
+        return False
+    try:
+        command = provider_command(provider)
+    except HarnessError:
+        return False
+    return resolve_executable(command) is not None
+
+
+def available_providers() -> list[str]:
+    return [provider for provider in known_provider_names() if provider_available(provider)]
+
+
+def pipeline_extracts_pc_candidates(pipeline_mode: Any) -> bool:
+    return str(pipeline_mode or PIPELINE_MODE) in {"standard", "full"}
+
+
+def provider_schedule_stages(state: dict[str, Any]) -> list[str]:
+    stages = list(STAGES)
+    if pipeline_extracts_pc_candidates(state.get("pipeline_mode") or PIPELINE_MODE):
+        stages.append(PC_REVIEW_STAGE)
+    return stages
+
+
+def stage_role(stage: str) -> str:
+    if stage == PC_REVIEW_STAGE:
+        return "pc_extract"
+    lowered = stage.lower()
+    if "develop" in lowered or "fix" in lowered:
+        return "code_write"
+    if "review" in lowered:
+        return "review"
+    if "verify" in lowered:
+        return "verify"
+    if "document" in lowered:
+        return "document"
+    if "spec" in lowered or "plan" in lowered:
+        return "plan"
+    return "plan"
+
+
+def provider_order_for_role(stage: str, role: str, policy: dict[str, Any]) -> list[str]:
+    preferred: list[str] = []
+    preset_provider = preset_provider_for_stage(stage) if stage in STAGES else None
+    if preset_provider:
+        preferred.append(preset_provider)
+
+    if role == "code_write":
+        preferred.extend(str(item) for item in policy.get("code_write_order", []))
+    else:
+        role_orders = policy.get("role_orders", {})
+        if isinstance(role_orders, dict) and isinstance(role_orders.get(role), list):
+            preferred.extend(str(item) for item in role_orders[role])
+        else:
+            preferred.extend(str(item) for item in policy.get("non_code_order", []))
+    preferred.extend(known_provider_names())
+    return ordered_unique(preferred)
+
+
+def candidate_providers_for_stage(
+    stage: str,
+    policy: dict[str, Any],
+    available: list[str],
+) -> list[str]:
+    role = stage_role(stage)
+    available_set = set(available)
+    denied = {str(item).strip().lower() for item in policy.get("code_write_denied", [])}
+    allowed = {str(item).strip().lower() for item in policy.get("code_write_allowed", [])}
+    candidates: list[str] = []
+    for provider in provider_order_for_role(stage, role, policy):
+        if provider not in available_set:
+            continue
+        caps = provider_capabilities(provider)
+        if role not in caps:
+            continue
+        if role == "code_write":
+            if provider in denied:
+                continue
+            if allowed and provider not in allowed:
+                continue
+        candidates.append(provider)
+    return ordered_unique(candidates)
+
+
+def latest_code_writer(assignments: dict[str, str], stages: list[str]) -> str | None:
+    for stage in reversed(stages):
+        provider = assignments.get(stage)
+        if provider and stage_role(stage) == "code_write":
+            return provider
+    return None
+
+
+def stage_provider_score(
+    stage: str,
+    provider: str,
+    candidates: list[str],
+    assignments: dict[str, str],
+    ordered_stages: list[str],
+    policy: dict[str, Any],
+) -> int:
+    role = stage_role(stage)
+    score = candidates.index(provider) * 100
+    if role != "code_write" and policy.get("reserve_code_writers_for_code_stages", True):
+        code_order = ordered_unique([str(item) for item in policy.get("code_write_order", [])])
+        non_code_candidates = [
+            item for item in candidates if "code_write" not in provider_capabilities(item)
+        ]
+        if provider in code_order and non_code_candidates:
+            score += 30
+    if (
+        role in {"review", "verify", "pc_extract"}
+        and policy.get("avoid_reusing_recent_code_writer_for_review", True)
+        and latest_code_writer(assignments, ordered_stages) == provider
+        and len(candidates) > 1
+    ):
+        score += 80
+    return score
+
+
+def compute_provider_schedule(
+    state: dict[str, Any],
+    *,
+    strict_independence: bool,
+) -> dict[str, str] | None:
+    policy = model_policy()
+    available = available_providers()
+    min_distinct = int(policy.get("min_distinct_agents", 2) or 0)
+    if len(available) < min_distinct:
+        available_text = ", ".join(available) if available else "none"
+        raise HarnessError(
+            f"At least {min_distinct} distinct available providers are required by model_policy. "
+            f"Available providers: {available_text}."
+        )
+
+    stages = provider_schedule_stages(state)
+    states: list[tuple[int, dict[str, str]]] = [(0, {})]
+    for stage in stages:
+        candidates = candidate_providers_for_stage(stage, policy, available)
+        if not candidates:
+            raise HarnessError(
+                f"No available provider can run stage {stage} with role={stage_role(stage)}. "
+                "Check model_policy providers, capabilities, and installed CLIs."
+            )
+        next_states: list[tuple[int, dict[str, str]]] = []
+        for cost, assignments in states:
+            previous_provider = assignments.get(stages[len(assignments) - 1]) if assignments else None
+            for provider in candidates:
+                if strict_independence and previous_provider == provider:
+                    continue
+                next_assignments = dict(assignments)
+                add = stage_provider_score(
+                    stage,
+                    provider,
+                    candidates,
+                    assignments,
+                    stages[: len(assignments)],
+                    policy,
+                )
+                next_assignments[stage] = provider
+                next_states.append((cost + add, next_assignments))
+        if not next_states:
+            return None
+        next_states.sort(key=lambda item: (item[0], [item[1].get(stage, "") for stage in stages]))
+        states = next_states[:200]
+
+    cost, schedule = min(states, key=lambda item: (item[0], [item[1].get(stage, "") for stage in stages]))
+    if len(set(schedule.values())) < min_distinct:
+        raise HarnessError(
+            f"Provider schedule uses fewer than {min_distinct} distinct providers: {schedule}"
+        )
+    return schedule
+
+
+def build_provider_schedule(state: dict[str, Any]) -> dict[str, str]:
+    policy = model_policy()
+    strict = bool(policy.get("no_adjacent_same_provider", True))
+    schedule = compute_provider_schedule(state, strict_independence=strict)
+    if schedule is not None:
+        return schedule
+    mode = str(policy.get("on_independence_violation", "block")).strip().lower()
+    if mode == "allow":
+        fallback = compute_provider_schedule(state, strict_independence=False)
+        if fallback is not None:
+            return fallback
+    raise HarnessError(
+        "Cannot build a provider schedule that preserves model independence. "
+        "Add another available provider or relax model_policy.on_independence_violation."
+    )
+
+
+def ensure_provider_schedule(
+    state: dict[str, Any],
+    *,
+    persist: bool = True,
+    console: bool = False,
+    record_event: bool = True,
+) -> dict[str, str]:
+    stages = provider_schedule_stages(state)
+    existing = state.get("provider_schedule")
+    if isinstance(existing, dict) and all(str(existing.get(stage) or "") for stage in stages):
+        return {stage: str(existing[stage]) for stage in stages}
+
+    schedule = build_provider_schedule(state)
+    state["provider_schedule"] = schedule
+    state["provider_policy"] = {
+        "min_distinct_agents": int(model_policy().get("min_distinct_agents", 2) or 0),
+        "no_adjacent_same_provider": bool(model_policy().get("no_adjacent_same_provider", True)),
+        "code_write_allowed": model_policy().get("code_write_allowed", []),
+        "code_write_denied": model_policy().get("code_write_denied", []),
+    }
+    if record_event and state.get("events") is not None:
+        log_event(
+            state,
+            "provider_schedule_created",
+            "created provider schedule",
+            console=console,
+            schedule=json.dumps(schedule, ensure_ascii=False),
+        )
+    if persist and state_path(state["feature_name"]).exists():
+        save_state(state)
+    return schedule
+
+
+def provider_for_stage(stage: str, state: dict[str, Any] | None = None) -> str:
+    if state is not None:
+        schedule = ensure_provider_schedule(state, record_event=False)
+        provider = str(schedule.get(stage) or "")
+        if provider:
+            return provider
+    provider = preset_provider_for_stage(stage)
+    if provider:
+        return provider
+    policy = model_policy()
+    available = available_providers()
+    candidates = candidate_providers_for_stage(stage, policy, available)
+    if not candidates:
+        raise HarnessError(f"No provider available for stage {stage}.")
+    return candidates[0]
 
 
 def feature_dir(feature: str) -> Path:
@@ -2267,7 +2596,7 @@ def record_project_history(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def should_extract_pc_candidates(state: dict[str, Any]) -> bool:
-    return str(state.get("pipeline_mode") or PIPELINE_MODE) in {"standard", "full"}
+    return pipeline_extracts_pc_candidates(state.get("pipeline_mode") or PIPELINE_MODE)
 
 
 def pc_candidate_source_artifact_text(feature: str, max_chars_per_file: int = 8000) -> str:
@@ -2383,7 +2712,12 @@ If there are no worthwhile candidates, return {{"candidates": []}}.
 """
 
 
-def normalize_pc_candidate(raw: dict[str, Any], state: dict[str, Any], created_at: str) -> dict[str, Any] | None:
+def normalize_pc_candidate(
+    raw: dict[str, Any],
+    state: dict[str, Any],
+    created_at: str,
+    provider: str,
+) -> dict[str, Any] | None:
     impact_scope = compact_history_text(raw.get("impact_scope") or raw.get("scope"), max_len=80)
     if impact_scope.strip().lower() != PC_PROJECT_WIDE_SCOPE:
         return None
@@ -2413,7 +2747,7 @@ def normalize_pc_candidate(raw: dict[str, Any], state: dict[str, Any], created_a
         "created_at": created_at,
         "decided_at": "",
         "decision_reason": "",
-        "extraction_model": "claude",
+        "extraction_model": provider,
     }
 
 
@@ -2447,15 +2781,17 @@ def extract_project_contract_candidates(state: dict[str, Any]) -> dict[str, Any]
         return {"status": "skipped", "reason": "pipeline does not extract PC candidates"}
 
     feature = str(state["feature_name"])
+    provider = provider_for_stage(PC_REVIEW_STAGE, state)
     prompt = build_pc_candidate_extraction_prompt(state)
     log_event(
         state,
         "pc_candidate_extraction_started",
         "extracting project contract candidates",
         stage=PC_REVIEW_STAGE,
+        provider=provider,
     )
     result = run_text_provider_prompt(
-        "claude",
+        provider,
         prompt,
         logs_dir=run_dir(feature) / "logs",
         log_prefix="pc_candidates",
@@ -2482,7 +2818,7 @@ def extract_project_contract_candidates(state: dict[str, Any]) -> dict[str, Any]
     normalized = [
         candidate
         for candidate in (
-            normalize_pc_candidate(item, state, created_at)
+            normalize_pc_candidate(item, state, created_at, provider)
             for item in raw_candidates
             if isinstance(item, dict)
         )
@@ -2491,7 +2827,7 @@ def extract_project_contract_candidates(state: dict[str, Any]) -> dict[str, Any]
     append_result = append_pc_candidates(normalized, state)
     extraction = {
         "status": "PASS",
-        "provider": "claude",
+        "provider": provider,
         "raw_candidate_count": len(raw_candidates),
         "candidate_count": len(normalized),
         "filtered_out_count": len(raw_candidates) - len(normalized),
@@ -2909,7 +3245,7 @@ def print_detailed_status(state: dict[str, Any]) -> None:
         expected_result_json = stage_result_json_path(feature, stage)
         attempt = str(state.get("attempts", {}).get(stage, 0) or 0)
         try:
-            provider = provider_for_stage(stage)
+            provider = provider_for_stage(stage, state)
         except HarnessError:
             provider = "-"
 
@@ -2959,6 +3295,7 @@ def prompt_path(state: dict[str, Any], stage: str) -> Path:
 def generate_prompt(state: dict[str, Any], stage: str, retry_context: str | None = None) -> Path:
     feature = state["feature_name"]
     meta, body, raw = read_preset(stage)
+    scheduled_provider = provider_for_stage(stage, state)
     preset_text = raw.replace("[기능명]", feature)
     output = stage_output_path(feature, stage)
     result_json = stage_result_json_path(feature, stage)
@@ -3006,6 +3343,7 @@ def generate_prompt(state: dict[str, Any], stage: str, retry_context: str | None
 - pipeline_mode: {PIPELINE_MODE}
 - stage: {stage}
 - preferred_model: {meta.get("preferred_model", "")}
+- scheduled_provider: {scheduled_provider}
 - performance: {normalize_performance(state.get("performance"))}
 - output_file: {rel(output)}
 - result_json_file: {rel(result_json)}
@@ -3153,7 +3491,7 @@ def execute_current_prompt(state: dict[str, Any], timeout_seconds: int) -> dict[
     if not prompt_file.exists():
         raise HarnessError(f"Prompt file does not exist: {prompt_file}")
 
-    provider = provider_for_stage(stage)
+    provider = provider_for_stage(stage, state)
     prompt_text = prompt_file.read_text(encoding="utf-8")
     logs_dir = run_dir(feature) / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -3794,6 +4132,7 @@ def create_run(
         "approved_stages": [],
         "events": [],
     }
+    ensure_provider_schedule(state, persist=False, console=False, record_event=False)
     save_state(state)
     log_event(
         state,
@@ -3803,6 +4142,12 @@ def create_run(
         feature=feature,
         performance=performance_name,
         defaults_mode=defaults_mode,
+    )
+    log_event(
+        state,
+        "provider_schedule_created",
+        "created provider schedule",
+        schedule=json.dumps(state.get("provider_schedule", {}), ensure_ascii=False),
     )
     generate_prompt(state, START_STAGE)
     return state
@@ -3832,7 +4177,7 @@ def latest_provider_artifacts(
     state: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     try:
-        provider = provider_for_stage(stage)
+        provider = provider_for_stage(stage, state)
     except Exception:
         provider = "unknown"
     attempt = 1
@@ -4475,13 +4820,39 @@ def print_status(feature: str | None) -> None:
 
 
 def print_providers() -> None:
-    for provider in ["codex", "claude", "agy"]:
-        command = provider_command(provider)
-        executable = resolve_executable(command)
-        print(f"{provider}: {'ok' if executable else 'missing'}")
+    for provider in known_provider_names():
+        try:
+            command = provider_command(provider)
+            executable = resolve_executable(command)
+        except HarnessError as exc:
+            command = []
+            executable = None
+            print(f"{provider}: error ({exc})")
+            continue
+        status = "ok" if provider_enabled(provider) and executable else "missing"
+        if not provider_enabled(provider):
+            status = "disabled"
+        print(f"{provider}: {status}")
+        print(f"  capabilities: {', '.join(sorted(provider_capabilities(provider))) or '-'}")
         print(f"  command: {' '.join(command)}")
         if executable:
             print(f"  executable: {executable}")
+
+
+def print_provider_schedule_preview() -> None:
+    state = {
+        "feature_name": "_doctor",
+        "pipeline_mode": PIPELINE_MODE,
+        "events": [],
+    }
+    try:
+        schedule = build_provider_schedule(state)
+    except HarnessError as exc:
+        print(color_text(f"provider_schedule: ERROR {exc}", "red", "bold"))
+        return
+    print("provider_schedule:")
+    for stage in provider_schedule_stages(state):
+        print(f"  {stage}: {schedule.get(stage)}")
 
 
 def print_prompt(feature: str, do_print: bool) -> None:
@@ -4536,7 +4907,7 @@ def explain_lines(state: dict[str, Any]) -> list[str]:
     ]
     if stage in STAGES:
         try:
-            lines.append(f"provider: {provider_for_stage(stage)}")
+            lines.append(f"provider: {provider_for_stage(stage, state)}")
         except HarnessError:
             lines.append("provider: -")
     if state.get("current_prompt"):
@@ -4741,6 +5112,7 @@ def doctor(deep: bool = False, deep_timeout_seconds: int = DEFAULT_DOCTOR_DEEP_T
         print(f"preset {stage}: {'ok' if path.exists() else 'missing'}")
     print("providers:")
     print_providers()
+    print_provider_schedule_preview()
     ensure_dirs()
     print(f"runs_dir: {RUNS_DIR}")
     print(f"features_dir: {FEATURES_DIR}")
@@ -4749,7 +5121,9 @@ def doctor(deep: bool = False, deep_timeout_seconds: int = DEFAULT_DOCTOR_DEEP_T
         print(f"  {path}")
     if deep:
         print("deep provider smoke tests:")
-        for provider in ["codex", "claude", "agy"]:
+        for provider in known_provider_names():
+            if not provider_enabled(provider):
+                continue
             doctor_provider_smoke(provider, deep_timeout_seconds)
 
 
