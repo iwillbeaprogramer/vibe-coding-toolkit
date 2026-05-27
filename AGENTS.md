@@ -11,7 +11,7 @@ Do not create root-level product files unless the user explicitly asks for a roo
 - `python .ai\harness_fast.py doctor`: check fast-pipeline presets, provider availability, and schedule preview.
 - `python .ai\harness_standard.py run "request" --feature feature-name --yes --defaults`: run the normal spec/develop/review/fix/verify workflow.
 - `python .ai\harness.py run "request" --feature feature-name --yes --defaults`: run the full workflow, including documentation and project-contract candidate extraction.
-- `python -m py_compile .ai\harness.py .ai\harness_fast.py .ai\harness_standard.py .ai\templates\docx_helper.py`: validate harness Python syntax.
+- `python -m py_compile .ai\harness.py .ai\harness_fast.py .ai\harness_standard.py .ai\pc_review.py .ai\templates\docx_helper.py`: validate harness Python syntax.
 - `python .ai\pc_review.py`: review pending Project Contract candidates.
 
 Project-specific build or test commands should be configured in `.ai/harness.config.json` under `verification.commands`.

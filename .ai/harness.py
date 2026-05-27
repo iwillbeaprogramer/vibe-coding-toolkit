@@ -3378,8 +3378,17 @@ def print_provider_heartbeat(
     return stdout_size, stderr_size
 
 
+def harness_script_for_pipeline_mode(pipeline_mode: Any) -> str:
+    mode = str(pipeline_mode or PIPELINE_MODE)
+    if mode == "fast":
+        return ".ai\\harness_fast.py"
+    if mode == "standard":
+        return ".ai\\harness_standard.py"
+    return ".ai\\harness.py"
+
+
 def suggested_retry_command(state: dict[str, Any], *, auto: bool = True) -> str:
-    script = ".ai\\harness_fast.py" if state.get("pipeline_mode") == "fast" else ".ai\\harness.py"
+    script = harness_script_for_pipeline_mode(state.get("pipeline_mode"))
     feature = str(state.get("feature_name") or "<feature>")
     parts = ["python", script, "retry", feature]
     if auto:
@@ -4826,7 +4835,7 @@ def print_log(feature: str, follow: bool = False, lines: int = 80) -> None:
 
 
 def harness_script_for_state(state: dict[str, Any]) -> str:
-    return ".ai\\harness_fast.py" if state.get("pipeline_mode") == "fast" else ".ai\\harness.py"
+    return harness_script_for_pipeline_mode(state.get("pipeline_mode"))
 
 
 def explain_lines(state: dict[str, Any]) -> list[str]:

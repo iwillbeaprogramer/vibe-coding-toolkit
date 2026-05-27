@@ -74,6 +74,7 @@
           ".ai\\harness.py",
           ".ai\\harness_fast.py",
           ".ai\\harness_standard.py",
+          ".ai\\pc_review.py",
           ".ai\\templates\\docx_helper.py"
         ]
       },
