@@ -149,7 +149,7 @@ def _detailLive(symbol: str) -> Optional[dict[str, Any]]:
             "market_cap": _firstNumber(info.get("marketCap")),
             "pe_ratio": _firstNumber(info.get("trailingPE"), info.get("forwardPE")),
             "eps": _firstNumber(info.get("trailingEps"), info.get("forwardEps")),
-            "dividend_yield": _firstNumber(info.get("dividendYield")),
+            "dividend_yield": _normalizeDividendYield(info.get("dividendYield")),
             "week_high_52": _firstNumber(info.get("fiftyTwoWeekHigh")),
             "week_low_52": _firstNumber(info.get("fiftyTwoWeekLow")),
             "last_updated": datetime.now(timezone.utc).isoformat(),
@@ -216,6 +216,15 @@ def _firstNumber(*values: Any) -> Optional[float]:
             continue
         return number
     return None
+
+
+def _normalizeDividendYield(value: Any) -> Optional[float]:
+    # yfinance returns dividendYield as either a ratio (e.g. 0.018) or a percent
+    # (e.g. 1.8). Always emit a ratio so the frontend can render with value * 100.
+    number = _firstNumber(value)
+    if number is None:
+        return None
+    return number / 100.0 if number > 1 else number
 
 
 def _strOrNone(value: Any) -> Optional[str]:

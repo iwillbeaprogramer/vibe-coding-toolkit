@@ -2,24 +2,15 @@
 
 from __future__ import annotations
 
-import importlib
-import os
-
 import pytest
+from fastapi.testclient import TestClient
 
-os.environ["STOCK_API_FORCE_MOCK"] = "1"
-
-from fastapi.testclient import TestClient  # noqa: E402
-
-from src.backend import main as main_module  # noqa: E402
-from src.backend.services import stock_service  # noqa: E402
+from src.backend import main as main_module
+from src.backend.services import stock_service
 
 
 @pytest.fixture(scope="module")
 def client() -> TestClient:
-    # Reload to ensure the force-mock env is applied at import time.
-    importlib.reload(stock_service)
-    importlib.reload(main_module)
     return TestClient(main_module.app)
 
 
@@ -29,11 +20,9 @@ def test_health(client: TestClient) -> None:
     assert response.json() == {"status": "ok"}
 
 
-def test_search_too_short_returns_400(client: TestClient) -> None:
+def test_search_too_short_returns_422(client: TestClient) -> None:
     response = client.get("/api/search", params={"q": "a"})
-    assert response.status_code == 400
-    body = response.json()
-    assert body["detail"]["error"] == "invalid_query"
+    assert response.status_code == 422
 
 
 def test_search_returns_mock_results(client: TestClient) -> None:

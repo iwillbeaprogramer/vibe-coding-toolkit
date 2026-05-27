@@ -36,7 +36,13 @@ def healthcheck() -> dict[str, str]:
 
 
 @app.get("/api/search", response_model=SearchResponse)
-def searchStocks(q: str = Query(..., min_length=1, max_length=120)) -> SearchResponse:
+def searchStocks(
+    q: str = Query(
+        ...,
+        min_length=settings.min_search_length,
+        max_length=settings.max_search_length,
+    ),
+) -> SearchResponse:
     try:
         payload = stock_service.searchSymbols(q)
     except ValueError as exc:

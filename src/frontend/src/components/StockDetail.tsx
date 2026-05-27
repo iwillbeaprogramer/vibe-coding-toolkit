@@ -55,8 +55,7 @@ function formatLargeNumber(value: number | null): string {
 
 function formatPercent(value: number | null): string {
   if (value === null || value === undefined || Number.isNaN(value)) return NA;
-  const ratio = Math.abs(value) <= 1 ? value * 100 : value;
-  return `${ratio.toFixed(2)}%`;
+  return `${(value * 100).toFixed(2)}%`;
 }
 
 function formatDate(value: string | null): string {

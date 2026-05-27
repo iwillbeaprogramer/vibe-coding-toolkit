@@ -119,7 +119,7 @@ export function StockChart({ data, period, loading, error, onPeriodChange, symbo
       {!loading && !error && rows.length > 0 && (
         <div className="chart-body">
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={rows} margin={{ top: 10, right: 16, left: 8, bottom: 0 }}>
+            <AreaChart data={rows} syncId="stockSync" margin={{ top: 10, right: 16, left: 8, bottom: 0 }}>
               <defs>
                 <linearGradient id="priceGradient" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor="#00e5ff" stopOpacity={0.55} />
@@ -151,7 +151,7 @@ export function StockChart({ data, period, loading, error, onPeriodChange, symbo
             </AreaChart>
           </ResponsiveContainer>
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={rows} margin={{ top: 0, right: 16, left: 8, bottom: 0 }}>
+            <BarChart data={rows} syncId="stockSync" margin={{ top: 0, right: 16, left: 8, bottom: 0 }}>
               <CartesianGrid stroke="rgba(255,255,255,0.05)" vertical={false} />
               <XAxis
                 dataKey="label"
