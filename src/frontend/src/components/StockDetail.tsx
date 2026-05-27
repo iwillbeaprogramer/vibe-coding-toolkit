@@ -1,9 +1,14 @@
-import { Building2, Globe2, TrendingDown, TrendingUp } from 'lucide-react';
+import { Building2, Globe2, Minus, TrendingDown, TrendingUp } from 'lucide-react';
 import type { StockDetailResponse } from '../types';
 
 type StockDetailProps = {
   detail: StockDetailResponse | null;
   isLoading: boolean;
+};
+
+type ChangeState = {
+  type: 'up' | 'down' | 'neutral';
+  label: string;
 };
 
 export default function StockDetail({ detail, isLoading }: StockDetailProps) {
@@ -26,8 +31,10 @@ export default function StockDetail({ detail, isLoading }: StockDetailProps) {
           <h2>{detail.symbol}</h2>
           <p className="securityName">{detail.name ?? '데이터 없음'}</p>
         </div>
-        <div className={`changeBadge ${change.value >= 0 ? 'up' : 'down'}`}>
-          {change.value >= 0 ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
+        <div className={`changeBadge ${change.type}`}>
+          {change.type === 'up' ? <TrendingUp size={18} /> : null}
+          {change.type === 'down' ? <TrendingDown size={18} /> : null}
+          {change.type === 'neutral' ? <Minus size={18} /> : null}
           <span>{change.label}</span>
         </div>
       </div>
@@ -88,13 +95,16 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function toChange(current?: number | null, previous?: number | null) {
+function toChange(current?: number | null, previous?: number | null): ChangeState {
   if (current == null || previous == null || previous === 0) {
-    return { value: 0, label: '데이터 없음' };
+    return { type: 'neutral', label: '데이터 없음' };
   }
   const value = current - previous;
   const percent = (value / previous) * 100;
-  return { value, label: `${value >= 0 ? '+' : ''}${value.toFixed(2)} (${percent.toFixed(2)}%)` };
+  return {
+    type: value >= 0 ? 'up' : 'down',
+    label: `${value >= 0 ? '+' : ''}${value.toFixed(2)} (${percent.toFixed(2)}%)`,
+  };
 }
 
 function formatNumber(value?: number | null) {

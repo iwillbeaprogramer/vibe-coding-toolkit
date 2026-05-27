@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -15,7 +15,7 @@ class SearchResult(BaseModel):
 
 
 class ChartPoint(BaseModel):
-    date: date
+    date: str
     open: float | None = None
     high: float | None = None
     low: float | None = None

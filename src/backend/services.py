@@ -183,10 +183,9 @@ def _toChartPoints(history: Any) -> list[ChartPoint]:
 
     points: list[ChartPoint] = []
     for index, row in history.iterrows():
-        pointDate = index.date() if hasattr(index, "date") else index
         points.append(
             ChartPoint(
-                date=pointDate,
+                date=_formatChartDate(index),
                 open=_toFloat(row.get("Open")),
                 high=_toFloat(row.get("High")),
                 low=_toFloat(row.get("Low")),
@@ -195,6 +194,21 @@ def _toChartPoints(history: Any) -> list[ChartPoint]:
             )
         )
     return points
+
+
+def _formatChartDate(index: Any) -> str:
+    if hasattr(index, "to_pydatetime"):
+        value = index.to_pydatetime()
+    else:
+        value = index
+
+    if isinstance(value, datetime):
+        if value.hour == 0 and value.minute == 0 and value.second == 0 and value.microsecond == 0:
+            return value.date().isoformat()
+        return value.isoformat()
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
 
 
 def _toPriceSummary(info: dict[str, Any], fastInfo: dict[str, Any]) -> PriceSummary:

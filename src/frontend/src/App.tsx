@@ -1,10 +1,10 @@
-import { AlertCircle, BarChart3, RefreshCw, Search } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { AlertCircle, BarChart3, RefreshCw } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { getStockDetail } from './api';
 import Disclaimers from './components/Disclaimers';
 import SearchBar from './components/SearchBar';
-import StockDetail from './components/StockDetail';
 import StockChart from './components/StockChart';
+import StockDetail from './components/StockDetail';
 import type { ChartPeriod, StockDetailResponse } from './types';
 
 const DEFAULT_SYMBOL = 'QLD';
@@ -15,20 +15,37 @@ export default function App() {
   const [detail, setDetail] = useState<StockDetailResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const requestIdRef = useRef(0);
 
   const loadDetail = useCallback((nextSymbol: string, nextPeriod: ChartPeriod) => {
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
     const controller = new AbortController();
+    let active = true;
+    const canUpdate = () => active && requestIdRef.current === requestId;
+
     setIsLoading(true);
     setError(null);
     getStockDetail(nextSymbol, nextPeriod, controller.signal)
-      .then((payload) => setDetail(payload))
+      .then((payload) => {
+        if (canUpdate()) {
+          setDetail(payload);
+        }
+      })
       .catch((reason: Error) => {
-        if (reason.name !== 'AbortError') {
+        if (canUpdate() && reason.name !== 'AbortError') {
           setError(reason.message);
         }
       })
-      .finally(() => setIsLoading(false));
-    return () => controller.abort();
+      .finally(() => {
+        if (canUpdate()) {
+          setIsLoading(false);
+        }
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
   }, []);
 
   useEffect(() => loadDetail(symbol, period), [loadDetail, period, symbol]);

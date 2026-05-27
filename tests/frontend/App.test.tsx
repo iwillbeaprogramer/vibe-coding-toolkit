@@ -3,8 +3,10 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../../src/frontend/src/App';
 import SearchBar from '../../src/frontend/src/components/SearchBar';
+import StockDetail from '../../src/frontend/src/components/StockDetail';
+import type { StockDetailResponse } from '../../src/frontend/src/types';
 
-const detailPayload = {
+const detailPayload: StockDetailResponse = {
   symbol: 'QLD',
   name: 'ProShares Ultra QQQ',
   exchange: 'NYSEARCA',
@@ -108,5 +110,66 @@ describe('SearchBar', () => {
     await userEvent.click(screen.getByRole('button', { name: '조회' }));
 
     expect(onSelect).toHaveBeenCalledWith('QLD');
+  });
+
+  it('closes autocomplete results with Escape and outside click', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => [{ symbol: 'QLD', name: 'ProShares Ultra QQQ', exchange: 'NYSEARCA', assetType: 'ETF', currency: 'USD' }]
+    } as Response);
+
+    render(
+      <>
+        <button type="button">외부 영역</button>
+        <SearchBar onSelect={vi.fn()} />
+      </>
+    );
+
+    await userEvent.type(screen.getByLabelText('종목 검색'), 'QL');
+    expect(await screen.findByRole('option', { name: /QLD/ })).toBeInTheDocument();
+
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('option', { name: /QLD/ })).not.toBeInTheDocument();
+
+    await userEvent.clear(screen.getByLabelText('종목 검색'));
+    await userEvent.type(screen.getByLabelText('종목 검색'), 'QL');
+    expect(await screen.findByRole('option', { name: /QLD/ })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: '외부 영역' }));
+    expect(screen.queryByRole('option', { name: /QLD/ })).not.toBeInTheDocument();
+  });
+
+  it('selects autocomplete results with arrow keys and Enter', async () => {
+    const onSelect = vi.fn();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => [{ symbol: 'QLD', name: 'ProShares Ultra QQQ', exchange: 'NYSEARCA', assetType: 'ETF', currency: 'USD' }]
+    } as Response);
+
+    render(<SearchBar onSelect={onSelect} />);
+    await userEvent.type(screen.getByLabelText('종목 검색'), 'QL');
+    expect(await screen.findByRole('option', { name: /QLD/ })).toBeInTheDocument();
+
+    await userEvent.keyboard('{ArrowDown}{Enter}');
+
+    expect(onSelect).toHaveBeenCalledWith('QLD');
+    expect(screen.queryByRole('option', { name: /QLD/ })).not.toBeInTheDocument();
+  });
+});
+
+describe('StockDetail', () => {
+  it('uses a neutral change badge when price change data is missing', () => {
+    render(
+      <StockDetail
+        detail={{
+          ...detailPayload,
+          price: { ...detailPayload.price, currentPrice: null, previousClose: null }
+        }}
+        isLoading={false}
+      />
+    );
+
+    expect(screen.getAllByText('데이터 없음').length).toBeGreaterThan(0);
+    expect(document.querySelector('.changeBadge.neutral')).toBeInTheDocument();
   });
 });

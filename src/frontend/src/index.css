@@ -181,7 +181,8 @@ h3 {
   text-align: left;
 }
 
-.suggestItem:hover {
+.suggestItem:hover,
+.suggestItem.active {
   background: hsl(220 18% 20%);
 }
 
@@ -265,6 +266,11 @@ h3 {
 .changeBadge.down {
   background: hsl(8 44% 18%);
   color: hsl(8 86% 74%);
+}
+
+.changeBadge.neutral {
+  background: hsl(220 18% 20%);
+  color: hsl(218 14% 72%);
 }
 
 .priceBlock {
