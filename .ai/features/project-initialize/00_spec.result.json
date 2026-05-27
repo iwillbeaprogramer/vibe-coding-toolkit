@@ -1,0 +1,44 @@
+{
+  "status": "PASS",
+  "next_stage": "01_plan",
+  "human_gate_required": true,
+  "blocking_reason": "",
+  "risk_level": "high",
+  "harness_commit_required": false,
+  "changed_files": [
+    ".ai/features/project-initialize/00_spec.md",
+    ".ai/features/project-initialize/00_spec.result.json"
+  ],
+  "produced_files": [
+    ".ai/features/project-initialize/00_spec.md",
+    ".ai/features/project-initialize/00_spec.result.json"
+  ],
+  "verification_summary": "00_specify 단계는 스펙 작성만 수행하므로 별도 빌드/테스트를 실행하지 않았다.",
+  "fix_inputs": [],
+  "history_notes": {
+    "implemented": [
+      "React 프론트엔드와 FastAPI 백엔드 기반 주식/ETF 정보 조회 앱의 초기 스펙을 확정했다.",
+      "검색, 상세 지표, 차트, 오류 상태, Windows 로컬 실행 범위를 정의했다."
+    ],
+    "risks": [
+      "금융 데이터 공급원과 차트 라이브러리 선택으로 새 외부 의존성이 추가될 가능성이 있다.",
+      "무료 또는 무인증 데이터 공급원은 시세 지연, 누락, 제한이 있을 수 있다.",
+      "정식 Windows 설치 파일 패키징은 초기 범위에서 제외되어 후속 결정이 필요하다."
+    ],
+    "future_improvements": [
+      "정식 데스크톱 패키징(Electron 또는 Tauri 등)을 별도 기능으로 검토한다.",
+      "유료/공식 금융 데이터 API 연동과 API 키 관리 방식을 검토한다.",
+      "관심종목, 알림, 포트폴리오 기능을 후속 범위로 확장할 수 있다."
+    ],
+    "decisions": [
+      "feature_name_locked 정책에 따라 기능명은 project-initialize로 유지한다.",
+      "Windows 프로그램 요구는 초기 범위에서 Windows 로컬 실행 가능한 React/FastAPI 앱으로 해석한다.",
+      "실시간 스트리밍과 주문 기능은 초기 범위에서 제외한다.",
+      "데이터가 없는 지표는 오류가 아니라 데이터 없음으로 표시한다."
+    ],
+    "unresolved_items": [
+      "최종 금융 데이터 공급원과 차트 라이브러리는 01_plan 단계에서 후보를 비교해 확정해야 한다.",
+      "정식 설치 파일 제공 여부는 후속 사용자 승인 또는 별도 기능으로 결정해야 한다."
+    ]
+  }
+}
