@@ -75,7 +75,18 @@
           ".ai\\harness_fast.py",
           ".ai\\harness_standard.py",
           ".ai\\pc_review.py",
-          ".ai\\templates\\docx_helper.py"
+          ".ai\\templates\\docx_helper.py",
+          ".ai\\harness_core\\__init__.py",
+          ".ai\\harness_core\\text.py",
+          ".ai\\harness_core\\frontmatter.py",
+          ".ai\\harness_core\\history.py",
+          ".ai\\harness_core\\json_io.py",
+          ".ai\\harness_core\\docx_validation.py",
+          ".ai\\harness_core\\policy.py",
+          ".ai\\harness_core\\providers.py",
+          ".ai\\harness_core\\stage_runtime.py",
+          ".ai\\harness_core\\verification.py",
+          ".ai\\harness_core\\workflow.py"
         ]
       },
       {

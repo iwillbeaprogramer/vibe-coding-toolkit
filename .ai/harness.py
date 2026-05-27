@@ -10,10 +10,35 @@ import shutil
 import subprocess
 import sys
 import time
-import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+HARNESS_DIR = Path(__file__).resolve().parent
+if str(HARNESS_DIR) not in sys.path:
+    sys.path.insert(0, str(HARNESS_DIR))
+
+from harness_core.docx_validation import validate_docx_file as core_validate_docx_file
+from harness_core.frontmatter import parse_frontmatter, parse_scalar
+from harness_core.json_io import read_json_file, write_json_file
+from harness_core import history as history_core
+from harness_core import policy as policy_core
+from harness_core import providers as provider_core
+from harness_core import stage_runtime as stage_runtime_core
+from harness_core import verification as verification_core
+from harness_core import workflow as workflow_core
+from harness_core.text import (
+    boolish,
+    compact_history_text,
+    history_list,
+    history_object_list,
+    markdown_section_items,
+    markdown_sections,
+    norm_repo_path,
+    section_matches,
+    slugify,
+    validate_slug,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -271,23 +296,6 @@ def rel(path: Path) -> str:
     return path.resolve().relative_to(ROOT.resolve()).as_posix()
 
 
-def norm_repo_path(path: str) -> str:
-    return path.replace("\\", "/").strip()
-
-
-def slugify(text: str) -> str:
-    text = text.lower()
-    text = re.sub(r"[^a-z0-9]+", "-", text)
-    text = re.sub(r"-+", "-", text).strip("-")
-    if not text:
-        text = "feature-" + datetime.now().strftime("%Y%m%d%H%M%S")
-    return text[:60].strip("-") or "feature-" + datetime.now().strftime("%Y%m%d%H%M%S")
-
-
-def validate_slug(slug: str) -> bool:
-    return bool(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", slug))
-
-
 def ensure_dirs() -> None:
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     FEATURES_DIR.mkdir(parents=True, exist_ok=True)
@@ -484,175 +492,31 @@ def file_hash(path: Path) -> str:
 
 
 def is_harness_internal_path(path: str, feature: str) -> bool:
-    path = norm_repo_path(path)
-    if not path.startswith(".ai/runs/"):
-        return False
-    return path != f".ai/runs/{feature}/document_build.py"
-
-
-SNAPSHOT_GENERATED_DIR_NAMES = {
-    ".antigravitycli",
-    ".cache",
-    ".claude",
-    ".codex",
-    ".gradle",
-    ".git",
-    ".idea",
-    ".mypy_cache",
-    ".next",
-    ".nox",
-    ".nuxt",
-    ".parcel-cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".svelte-kit",
-    ".tox",
-    ".turbo",
-    ".venv",
-    ".vite",
-    ".vs",
-    ".vscode",
-    ".vstest",
-    "__pycache__",
-    "artifacts",
-    "bin",
-    "build",
-    "coverage",
-    "dist",
-    "env",
-    "htmlcov",
-    "log",
-    "logs",
-    "node_modules",
-    "obj",
-    "out",
-    "packages",
-    "target",
-    "temp",
-    "TestResults",
-    "tmp",
-    "vendor",
-    "venv",
-}
-
-SNAPSHOT_GENERATED_DIR_SUFFIXES = {
-    ".egg-info",
-}
-
-SNAPSHOT_GENERATED_FILE_NAMES = {
-    ".coverage",
-    ".DS_Store",
-    "desktop.ini",
-    "Thumbs.db",
-}
-
-SNAPSHOT_GENERATED_FILE_SUFFIXES = {
-    ".AssemblyAttributes.cs",
-    ".AssemblyInfoInputs.cache",
-    ".assets.cache",
-    ".cache",
-    ".coverage",
-    ".coveragexml",
-    ".designer.deps.json",
-    ".designer.runtimeconfig.json",
-    ".dtbcache.v2",
-    ".GeneratedMSBuildEditorConfig.editorconfig",
-    ".g.cs",
-    ".g.i.cs",
-    ".log",
-    ".map",
-    ".pyd",
-    ".pyc",
-    ".pyo",
-    ".suo",
-    ".tmp",
-    ".trx",
-    ".user",
-    ".vsidx",
-    "_MarkupCompile.i.cache",
-}
+    return policy_core.is_harness_internal_path(path, feature)
 
 
 def is_snapshot_generated_path(path: str) -> bool:
-    path = norm_repo_path(path)
-    parts = [part for part in path.split("/") if part]
-    if any(part in SNAPSHOT_GENERATED_DIR_NAMES for part in parts):
-        return True
-    if any(any(part.endswith(suffix) for suffix in SNAPSHOT_GENERATED_DIR_SUFFIXES) for part in parts):
-        return True
-    if parts and parts[-1] in SNAPSHOT_GENERATED_FILE_NAMES:
-        return True
-    return any(path.endswith(suffix) for suffix in SNAPSHOT_GENERATED_FILE_SUFFIXES)
+    return policy_core.is_snapshot_generated_path(path)
 
 
 def git_ignored_paths(paths: list[str]) -> set[str]:
-    if not paths:
-        return set()
-    try:
-        proc = subprocess.run(
-            ["git", "-c", f"safe.directory={ROOT.as_posix()}", "check-ignore", "--stdin"],
-            cwd=ROOT,
-            input="\n".join(paths) + "\n",
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
-    except OSError:
-        return set()
-    if proc.returncode not in {0, 1}:
-        return set()
-    return {norm_repo_path(line.strip()) for line in proc.stdout.splitlines() if line.strip()}
+    return policy_core.git_ignored_paths(globals(), paths)
 
 
 def snapshot_excluded_paths(paths: list[str]) -> set[str]:
-    generated = {path for path in paths if is_snapshot_generated_path(path)}
-    remaining = [path for path in paths if path not in generated]
-    return generated | git_ignored_paths(remaining)
+    return policy_core.snapshot_excluded_paths(globals(), paths)
 
 
 def repo_child_path(parent: Path, name: str) -> str:
-    if parent.resolve() == ROOT.resolve():
-        return name
-    return f"{rel(parent)}/{name}"
+    return policy_core.repo_child_path(globals(), parent, name)
 
 
 def file_policy_snapshot(feature: str) -> dict[str, str]:
-    snapshot: dict[str, str] = {}
-    candidates: list[tuple[Path, str]] = []
-    for dirpath, dirnames, filenames in os.walk(ROOT):
-        parent = Path(dirpath)
-        dirnames[:] = [
-            dirname
-            for dirname in dirnames
-            if not is_snapshot_generated_path(repo_child_path(parent, dirname))
-        ]
-        for filename in filenames:
-            rel_path = repo_child_path(parent, filename)
-            if is_snapshot_generated_path(rel_path):
-                continue
-            if is_harness_internal_path(rel_path, feature):
-                continue
-            candidates.append((parent / filename, rel_path))
-
-    excluded = snapshot_excluded_paths([rel_path for _, rel_path in candidates])
-    for path, rel_path in candidates:
-        if rel_path in excluded:
-            continue
-        try:
-            snapshot[rel_path] = file_hash(path)
-        except OSError:
-            continue
-    return snapshot
+    return policy_core.file_policy_snapshot(globals(), feature)
 
 
 def changed_since_snapshot(before: dict[str, str], feature: str) -> list[str]:
-    after = file_policy_snapshot(feature)
-    paths = set(before) | set(after)
-    excluded = snapshot_excluded_paths(list(paths))
-    return sorted(path for path in paths if path not in excluded and before.get(path) != after.get(path))
+    return policy_core.changed_since_snapshot(globals(), before, feature)
 
 
 def git_head() -> str:
@@ -673,52 +537,6 @@ def git_commit(message: str, amend: bool = False) -> str:
     return git_head()
 
 
-def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
-    if not text.startswith("---"):
-        return {}, text
-    lines = text.splitlines()
-    end_idx = None
-    for i in range(1, len(lines)):
-        if lines[i].strip() == "---":
-            end_idx = i
-            break
-    if end_idx is None:
-        return {}, text
-
-    meta_lines = lines[1:end_idx]
-    body = "\n".join(lines[end_idx + 1 :]) + "\n"
-    meta: dict[str, Any] = {}
-    current_key: str | None = None
-    for line in meta_lines:
-        if not line.strip():
-            continue
-        if line.startswith("  - ") and current_key:
-            meta.setdefault(current_key, []).append(parse_scalar(line[4:].strip()))
-            continue
-        if ":" in line:
-            key, value = line.split(":", 1)
-            key = key.strip()
-            value = value.strip()
-            if value == "":
-                meta[key] = []
-                current_key = key
-            else:
-                meta[key] = parse_scalar(value)
-                current_key = key
-    return meta, body
-
-
-def parse_scalar(value: str) -> Any:
-    value = value.strip()
-    if len(value) >= 2 and value[0] == value[-1] == '"':
-        return value[1:-1]
-    if value.lower() == "true":
-        return True
-    if value.lower() == "false":
-        return False
-    return value
-
-
 def read_preset(stage: str) -> tuple[dict[str, Any], str, str]:
     path = PRESETS_DIR / f"{stage}.md"
     if not path.exists():
@@ -729,57 +547,35 @@ def read_preset(stage: str) -> tuple[dict[str, Any], str, str]:
 
 
 def load_config() -> dict[str, Any]:
-    path = AI_DIR / "harness.config.json"
-    if not path.exists():
-        return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    return provider_core.load_config(globals())
 
 
 def raw_provider_command(provider: str) -> list[str]:
-    config = load_config()
-    configured = config.get("providers", {}).get(provider, {}).get("command")
-    command = configured or DEFAULT_PROVIDER_COMMANDS.get(provider)
-    if not command:
-        raise HarnessError(f"No provider command configured for {provider}")
-    return [str(part) for part in command]
+    return provider_core.raw_provider_command(globals(), provider)
 
 
 def normalize_performance(value: Any | None) -> str:
-    if value is None or str(value).strip() == "":
-        return DEFAULT_PERFORMANCE
-    performance = str(value).strip().lower()
-    if performance not in PERFORMANCE_PROFILES:
-        allowed = ", ".join(PERFORMANCE_PROFILES)
-        raise HarnessError(f"Unknown performance profile {value!r}. Expected one of: {allowed}.")
-    return performance
+    return provider_core.normalize_performance(globals(), value)
 
 
 def performance_profile(value: Any | None) -> dict[str, dict[str, str]]:
-    return PERFORMANCE_PROFILES[normalize_performance(value)]
+    return provider_core.performance_profile(globals(), value)
 
 
 def provider_performance_settings(provider: str, performance: Any | None) -> dict[str, str]:
-    return dict(performance_profile(performance).get(provider, {}))
+    return provider_core.provider_performance_settings(globals(), provider, performance)
 
 
 def command_has_option(command: list[str], *options: str) -> bool:
-    for part in command:
-        if part in options:
-            return True
-        for option in options:
-            if option.startswith("--") and part.startswith(f"{option}="):
-                return True
-    return False
+    return provider_core.command_has_option(command, *options)
 
 
 def command_has_config_key(command: list[str], key: str) -> bool:
-    return any(key in part for part in command)
+    return provider_core.command_has_config_key(command, key)
 
 
 def append_before_stdin_prompt(command: list[str], extra: list[str]) -> list[str]:
-    if command and command[-1] == "-":
-        return command[:-1] + extra + ["-"]
-    return command + extra
+    return provider_core.append_before_stdin_prompt(command, extra)
 
 
 def apply_performance_to_command(
@@ -787,26 +583,7 @@ def apply_performance_to_command(
     command: list[str],
     performance: Any | None,
 ) -> list[str]:
-    settings = provider_performance_settings(provider, performance)
-    if provider == "codex":
-        extra: list[str] = []
-        model = settings.get("model")
-        effort = settings.get("model_reasoning_effort")
-        if model and not command_has_option(command, "--model", "-m"):
-            extra.extend(["--model", model])
-        if effort and not command_has_config_key(command, "model_reasoning_effort"):
-            extra.extend(["-c", f'model_reasoning_effort="{effort}"'])
-        return append_before_stdin_prompt(command, extra) if extra else command
-    if provider == "claude":
-        extra = []
-        model = settings.get("model")
-        effort = settings.get("effort")
-        if model and not command_has_option(command, "--model"):
-            extra.extend(["--model", model])
-        if effort and not command_has_option(command, "--effort"):
-            extra.extend(["--effort", effort])
-        return append_before_stdin_prompt(command, extra) if extra else command
-    return command
+    return provider_core.apply_performance_to_command(globals(), provider, command, performance)
 
 
 def prepare_provider_command(
@@ -816,43 +593,22 @@ def prepare_provider_command(
     log_file: Path | None = None,
     performance: Any | None = None,
 ) -> tuple[list[str], bool]:
-    uses_prompt_placeholder = False
-    command: list[str] = []
-    for part in raw_provider_command(provider):
-        rendered = part.replace("{cwd}", str(ROOT))
-        if "{log_file}" in rendered:
-            rendered = rendered.replace("{log_file}", str(log_file) if log_file is not None else "<log_file>")
-        if "{prompt_file}" in rendered and prompt_file is not None:
-            rendered = rendered.replace("{prompt_file}", str(prompt_file))
-        if "{prompt_file_instruction}" in rendered:
-            uses_prompt_placeholder = True
-            if prompt_file is None:
-                instruction = "<prompt>"
-            else:
-                instruction = (
-                    "Read the harness prompt file at "
-                    f"{prompt_file} and execute every instruction in it. "
-                    "Write the required repository files exactly as specified. "
-                    "Do not summarize only; perform the task."
-                )
-            rendered = rendered.replace("{prompt_file_instruction}", instruction)
-        if "{prompt}" in rendered:
-            uses_prompt_placeholder = True
-            rendered = rendered.replace("{prompt}", prompt_text if prompt_text is not None else "<prompt>")
-        command.append(rendered)
-    command = apply_performance_to_command(provider, command, performance)
-    return command, uses_prompt_placeholder
+    return provider_core.prepare_provider_command(
+        globals(),
+        provider,
+        prompt_text,
+        prompt_file,
+        log_file,
+        performance,
+    )
 
 
 def provider_command(provider: str) -> list[str]:
-    command, _ = prepare_provider_command(provider)
-    return command
+    return provider_core.provider_command(globals(), provider)
 
 
 def redact_prompt_command(command: list[str], prompt_text: str | None) -> list[str]:
-    if not prompt_text:
-        return command
-    return ["<prompt>" if part == prompt_text else part.replace(prompt_text, "<prompt>") for part in command]
+    return provider_core.redact_prompt_command(command, prompt_text)
 
 
 def run_text_provider_prompt(
@@ -941,197 +697,67 @@ def expand_runtime_placeholders(value: Any, feature: str) -> str:
 
 
 def configured_verification_commands(feature: str) -> tuple[list[dict[str, Any]], bool]:
-    config = load_config()
-    verification = config.get("verification")
-    if verification is None:
-        return [], False
-    if verification is False:
-        return [], False
-    if not isinstance(verification, dict):
-        raise HarnessError("verification config must be an object.")
-    if verification.get("enabled", True) is False:
-        return [], False
-
-    required = boolish(verification.get("required", True))
-    timeout_default = int(
-        verification.get("timeout_seconds", DEFAULT_VERIFY_COMMAND_TIMEOUT_SECONDS)
-    )
-    raw_commands = verification.get("commands", [])
-    if not isinstance(raw_commands, list):
-        raise HarnessError("verification.commands must be a list.")
-
-    commands: list[dict[str, Any]] = []
-    for idx, item in enumerate(raw_commands, start=1):
-        if isinstance(item, list):
-            name = f"command_{idx}"
-            command = item
-            cwd = ROOT
-            timeout_seconds = timeout_default
-        elif isinstance(item, dict):
-            name = str(item.get("name") or f"command_{idx}")
-            command = item.get("command")
-            if not isinstance(command, list):
-                raise HarnessError(f"verification command {name!r} must have a list command.")
-            raw_cwd = item.get("cwd")
-            cwd = Path(expand_runtime_placeholders(raw_cwd, feature)) if raw_cwd else ROOT
-            if not cwd.is_absolute():
-                cwd = ROOT / cwd
-            timeout_seconds = int(item.get("timeout_seconds", timeout_default))
-        else:
-            raise HarnessError("verification.commands entries must be objects or lists.")
-
-        command_parts = [expand_runtime_placeholders(part, feature) for part in command]
-        if not command_parts or not command_parts[0]:
-            raise HarnessError(f"verification command {name!r} is empty.")
-        if timeout_seconds <= 0:
-            raise HarnessError(f"verification command {name!r} has invalid timeout.")
-
-        commands.append(
-            {
-                "name": slugify(name),
-                "command": command_parts,
-                "cwd": cwd,
-                "timeout_seconds": timeout_seconds,
-            }
-        )
-    return commands, required
+    return verification_core.configured_verification_commands(globals(), feature)
 
 
 def preset_provider_for_stage(stage: str) -> str | None:
-    if stage == PC_REVIEW_STAGE:
-        return None
-    meta, _, _ = read_preset(stage)
-    preferred = str(meta.get("preferred_model", ""))
-    provider = PROVIDER_BY_MODEL.get(preferred)
-    if not provider:
-        raise HarnessError(f"No provider mapped for preferred_model={preferred!r} stage={stage}")
-    return provider
+    return provider_core.preset_provider_for_stage(globals(), stage)
 
 
 def resolve_executable(command: list[str]) -> str | None:
-    if not command:
-        return None
-    return shutil.which(command[0])
+    return provider_core.resolve_executable(command)
 
 
 def merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-    merged = dict(base)
-    for key, value in override.items():
-        if isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key] = merge_dicts(merged[key], value)
-        else:
-            merged[key] = value
-    return merged
+    return provider_core.merge_dicts(base, override)
 
 
 def model_policy() -> dict[str, Any]:
-    config = load_config()
-    raw = config.get("model_policy", {})
-    if raw is None:
-        raw = {}
-    if not isinstance(raw, dict):
-        raise HarnessError("model_policy config must be an object.")
-    return merge_dicts(DEFAULT_MODEL_POLICY, raw)
+    return provider_core.model_policy(globals())
 
 
 def ordered_unique(values: list[str] | tuple[str, ...]) -> list[str]:
-    seen: set[str] = set()
-    result: list[str] = []
-    for value in values:
-        item = str(value).strip().lower()
-        if item and item not in seen:
-            seen.add(item)
-            result.append(item)
-    return result
+    return provider_core.ordered_unique(values)
 
 
 def known_provider_names() -> list[str]:
-    config = load_config()
-    configured = []
-    providers = config.get("providers", {})
-    if isinstance(providers, dict):
-        configured = [str(provider) for provider in providers]
-    return ordered_unique([*PROVIDERS, *configured])
+    return provider_core.known_provider_names(globals())
 
 
 def provider_config(provider: str) -> dict[str, Any]:
-    config = load_config()
-    providers = config.get("providers", {})
-    if not isinstance(providers, dict):
-        return {}
-    provider_config = providers.get(provider, {})
-    return provider_config if isinstance(provider_config, dict) else {}
+    return provider_core.provider_config(globals(), provider)
 
 
 def provider_enabled(provider: str) -> bool:
-    return provider_config(provider).get("enabled", True) is not False
+    return provider_core.provider_enabled(globals(), provider)
 
 
 def provider_capabilities(provider: str) -> set[str]:
-    configured = provider_config(provider).get("capabilities")
-    if isinstance(configured, list):
-        return {str(item).strip() for item in configured if str(item).strip()}
-    return set(DEFAULT_PROVIDER_CAPABILITIES.get(provider, []))
+    return provider_core.provider_capabilities(globals(), provider)
 
 
 def provider_available(provider: str) -> bool:
-    if not provider_enabled(provider):
-        return False
-    try:
-        command = provider_command(provider)
-    except HarnessError:
-        return False
-    return resolve_executable(command) is not None
+    return provider_core.provider_available(globals(), provider)
 
 
 def available_providers() -> list[str]:
-    return [provider for provider in known_provider_names() if provider_available(provider)]
+    return provider_core.available_providers(globals())
 
 
 def pipeline_extracts_pc_candidates(pipeline_mode: Any) -> bool:
-    return str(pipeline_mode or PIPELINE_MODE) in {"standard", "full"}
+    return provider_core.pipeline_extracts_pc_candidates(globals(), pipeline_mode)
 
 
 def provider_schedule_stages(state: dict[str, Any]) -> list[str]:
-    stages = list(STAGES)
-    if pipeline_extracts_pc_candidates(state.get("pipeline_mode") or PIPELINE_MODE):
-        stages.append(PC_REVIEW_STAGE)
-    return stages
+    return provider_core.provider_schedule_stages(globals(), state)
 
 
 def stage_role(stage: str) -> str:
-    if stage == PC_REVIEW_STAGE:
-        return "pc_extract"
-    lowered = stage.lower()
-    if "develop" in lowered or "fix" in lowered:
-        return "code_write"
-    if "review" in lowered:
-        return "review"
-    if "verify" in lowered:
-        return "verify"
-    if "document" in lowered:
-        return "document"
-    if "spec" in lowered or "plan" in lowered:
-        return "plan"
-    return "plan"
+    return provider_core.stage_role(globals(), stage)
 
 
 def provider_order_for_role(stage: str, role: str, policy: dict[str, Any]) -> list[str]:
-    preferred: list[str] = []
-    preset_provider = preset_provider_for_stage(stage) if stage in STAGES else None
-    if preset_provider:
-        preferred.append(preset_provider)
-
-    if role == "code_write":
-        preferred.extend(str(item) for item in policy.get("code_write_order", []))
-    else:
-        role_orders = policy.get("role_orders", {})
-        if isinstance(role_orders, dict) and isinstance(role_orders.get(role), list):
-            preferred.extend(str(item) for item in role_orders[role])
-        else:
-            preferred.extend(str(item) for item in policy.get("non_code_order", []))
-    preferred.extend(known_provider_names())
-    return ordered_unique(preferred)
+    return provider_core.provider_order_for_role(globals(), stage, role, policy)
 
 
 def candidate_providers_for_stage(
@@ -1139,32 +765,11 @@ def candidate_providers_for_stage(
     policy: dict[str, Any],
     available: list[str],
 ) -> list[str]:
-    role = stage_role(stage)
-    available_set = set(available)
-    denied = {str(item).strip().lower() for item in policy.get("code_write_denied", [])}
-    allowed = {str(item).strip().lower() for item in policy.get("code_write_allowed", [])}
-    candidates: list[str] = []
-    for provider in provider_order_for_role(stage, role, policy):
-        if provider not in available_set:
-            continue
-        caps = provider_capabilities(provider)
-        if role not in caps:
-            continue
-        if role == "code_write":
-            if provider in denied:
-                continue
-            if allowed and provider not in allowed:
-                continue
-        candidates.append(provider)
-    return ordered_unique(candidates)
+    return provider_core.candidate_providers_for_stage(globals(), stage, policy, available)
 
 
 def latest_code_writer(assignments: dict[str, str], stages: list[str]) -> str | None:
-    for stage in reversed(stages):
-        provider = assignments.get(stage)
-        if provider and stage_role(stage) == "code_write":
-            return provider
-    return None
+    return provider_core.latest_code_writer(globals(), assignments, stages)
 
 
 def stage_provider_score(
@@ -1175,23 +780,15 @@ def stage_provider_score(
     ordered_stages: list[str],
     policy: dict[str, Any],
 ) -> int:
-    role = stage_role(stage)
-    score = candidates.index(provider) * 100
-    if role != "code_write" and policy.get("reserve_code_writers_for_code_stages", True):
-        code_order = ordered_unique([str(item) for item in policy.get("code_write_order", [])])
-        non_code_candidates = [
-            item for item in candidates if "code_write" not in provider_capabilities(item)
-        ]
-        if provider in code_order and non_code_candidates:
-            score += 30
-    if (
-        role in {"review", "verify", "pc_extract"}
-        and policy.get("avoid_reusing_recent_code_writer_for_review", True)
-        and latest_code_writer(assignments, ordered_stages) == provider
-        and len(candidates) > 1
-    ):
-        score += 80
-    return score
+    return provider_core.stage_provider_score(
+        globals(),
+        stage,
+        provider,
+        candidates,
+        assignments,
+        ordered_stages,
+        policy,
+    )
 
 
 def compute_provider_schedule(
@@ -1199,70 +796,15 @@ def compute_provider_schedule(
     *,
     strict_independence: bool,
 ) -> dict[str, str] | None:
-    policy = model_policy()
-    available = available_providers()
-    min_distinct = int(policy.get("min_distinct_agents", 2) or 0)
-    if len(available) < min_distinct:
-        available_text = ", ".join(available) if available else "none"
-        raise HarnessError(
-            f"At least {min_distinct} distinct available providers are required by model_policy. "
-            f"Available providers: {available_text}."
-        )
-
-    stages = provider_schedule_stages(state)
-    states: list[tuple[int, dict[str, str]]] = [(0, {})]
-    for stage in stages:
-        candidates = candidate_providers_for_stage(stage, policy, available)
-        if not candidates:
-            raise HarnessError(
-                f"No available provider can run stage {stage} with role={stage_role(stage)}. "
-                "Check model_policy providers, capabilities, and installed CLIs."
-            )
-        next_states: list[tuple[int, dict[str, str]]] = []
-        for cost, assignments in states:
-            previous_provider = assignments.get(stages[len(assignments) - 1]) if assignments else None
-            for provider in candidates:
-                if strict_independence and previous_provider == provider:
-                    continue
-                next_assignments = dict(assignments)
-                add = stage_provider_score(
-                    stage,
-                    provider,
-                    candidates,
-                    assignments,
-                    stages[: len(assignments)],
-                    policy,
-                )
-                next_assignments[stage] = provider
-                next_states.append((cost + add, next_assignments))
-        if not next_states:
-            return None
-        next_states.sort(key=lambda item: (item[0], [item[1].get(stage, "") for stage in stages]))
-        states = next_states[:200]
-
-    cost, schedule = min(states, key=lambda item: (item[0], [item[1].get(stage, "") for stage in stages]))
-    if len(set(schedule.values())) < min_distinct:
-        raise HarnessError(
-            f"Provider schedule uses fewer than {min_distinct} distinct providers: {schedule}"
-        )
-    return schedule
+    return provider_core.compute_provider_schedule(
+        globals(),
+        state,
+        strict_independence=strict_independence,
+    )
 
 
 def build_provider_schedule(state: dict[str, Any]) -> dict[str, str]:
-    policy = model_policy()
-    strict = bool(policy.get("no_adjacent_same_provider", True))
-    schedule = compute_provider_schedule(state, strict_independence=strict)
-    if schedule is not None:
-        return schedule
-    mode = str(policy.get("on_independence_violation", "block")).strip().lower()
-    if mode == "allow":
-        fallback = compute_provider_schedule(state, strict_independence=False)
-        if fallback is not None:
-            return fallback
-    raise HarnessError(
-        "Cannot build a provider schedule that preserves model independence. "
-        "Add another available provider or relax model_policy.on_independence_violation."
-    )
+    return provider_core.build_provider_schedule(globals(), state)
 
 
 def ensure_provider_schedule(
@@ -1272,47 +814,17 @@ def ensure_provider_schedule(
     console: bool = False,
     record_event: bool = True,
 ) -> dict[str, str]:
-    stages = provider_schedule_stages(state)
-    existing = state.get("provider_schedule")
-    if isinstance(existing, dict) and all(str(existing.get(stage) or "") for stage in stages):
-        return {stage: str(existing[stage]) for stage in stages}
-
-    schedule = build_provider_schedule(state)
-    state["provider_schedule"] = schedule
-    state["provider_policy"] = {
-        "min_distinct_agents": int(model_policy().get("min_distinct_agents", 2) or 0),
-        "no_adjacent_same_provider": bool(model_policy().get("no_adjacent_same_provider", True)),
-        "code_write_allowed": model_policy().get("code_write_allowed", []),
-        "code_write_denied": model_policy().get("code_write_denied", []),
-    }
-    if record_event and state.get("events") is not None:
-        log_event(
-            state,
-            "provider_schedule_created",
-            "created provider schedule",
-            console=console,
-            schedule=json.dumps(schedule, ensure_ascii=False),
-        )
-    if persist and state_path(state["feature_name"]).exists():
-        save_state(state)
-    return schedule
+    return provider_core.ensure_provider_schedule(
+        globals(),
+        state,
+        persist=persist,
+        console=console,
+        record_event=record_event,
+    )
 
 
 def provider_for_stage(stage: str, state: dict[str, Any] | None = None) -> str:
-    if state is not None:
-        schedule = ensure_provider_schedule(state, record_event=False)
-        provider = str(schedule.get(stage) or "")
-        if provider:
-            return provider
-    provider = preset_provider_for_stage(stage)
-    if provider:
-        return provider
-    policy = model_policy()
-    available = available_providers()
-    candidates = candidate_providers_for_stage(stage, policy, available)
-    if not candidates:
-        raise HarnessError(f"No provider available for stage {stage}.")
-    return candidates[0]
+    return provider_core.provider_for_stage(globals(), stage, state)
 
 
 def feature_dir(feature: str) -> Path:
@@ -1364,522 +876,93 @@ def latest_verification_result_path(feature: str) -> Path:
 
 
 def history_summary_path() -> Path:
-    return HISTORY_DIR / "summary.md"
+    return history_core.history_summary_path(globals())
 
 
 def history_index_path() -> Path:
-    return HISTORY_DIR / "index.json"
+    return history_core.history_index_path(globals())
 
 
 def pc_candidates_path() -> Path:
-    return PC_CANDIDATES_PATH
+    return history_core.pc_candidates_path(globals())
 
 
 def project_contract_path() -> Path:
-    return PROJECT_CONTRACT_PATH
-
-
-def write_json_file(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    text = json.dumps(value, ensure_ascii=False, indent=4) + "\n"
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    tmp.replace(path)
-
-
-def read_json_file(path: Path, default: Any) -> Any:
-    if not path.exists():
-        return default
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return default
+    return history_core.project_contract_path(globals())
 
 
 def empty_pc_candidates_store() -> dict[str, Any]:
-    return {"version": PC_CANDIDATES_SCHEMA_VERSION, "candidates": []}
+    return history_core.empty_pc_candidates_store(globals())
 
 
 def read_pc_candidates_store() -> dict[str, Any]:
-    path = pc_candidates_path()
-    if not path.exists():
-        return empty_pc_candidates_store()
-    try:
-        parsed = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise HarnessError(f"Invalid PC candidates JSON: {rel(path)}: {exc}") from exc
-    if not isinstance(parsed, dict):
-        raise HarnessError(f"PC candidates file must be a JSON object: {rel(path)}")
-    candidates = parsed.get("candidates", [])
-    if not isinstance(candidates, list):
-        raise HarnessError(f"PC candidates file must contain a candidates list: {rel(path)}")
-    parsed["version"] = parsed.get("version") or PC_CANDIDATES_SCHEMA_VERSION
-    parsed["candidates"] = [item for item in candidates if isinstance(item, dict)]
-    return parsed
+    return history_core.read_pc_candidates_store(globals())
 
 
 def write_pc_candidates_store(store: dict[str, Any]) -> None:
-    candidates = store.get("candidates", [])
-    if not isinstance(candidates, list):
-        candidates = []
-    write_json_file(
-        pc_candidates_path(),
-        {
-            "version": store.get("version") or PC_CANDIDATES_SCHEMA_VERSION,
-            "candidates": candidates,
-        },
-    )
+    return history_core.write_pc_candidates_store(globals(), store)
 
 
 def pending_pc_candidates() -> list[dict[str, Any]]:
-    store = read_pc_candidates_store()
-    return [
-        item
-        for item in store.get("candidates", [])
-        if str(item.get("status") or "").strip() == PC_PENDING_STATUS
-    ]
+    return history_core.pending_pc_candidates(globals())
 
 
 def ensure_project_contract_file() -> None:
-    path = project_contract_path()
-    if path.exists():
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        "# Project Contract\n\n"
-        "## Hard Rules\n"
-        "- 모델은 Git commit, amend, reset, checkout, rebase, push를 직접 실행하지 않는다.\n"
-        "- 기존 테스트를 삭제하거나 비활성화하지 않는다.\n"
-        "- 요청 범위를 벗어난 리팩터링, 의존성 추가, 파일 이동은 하지 않는다.\n"
-        "\n"
-        "## Project Layout\n"
-        "- 프로덕션 코드는 루트 `src/` 하위에 둔다.\n"
-        "- 테스트 코드는 루트 `tests/` 하위에 둔다.\n"
-        "- 새 테스트 파일을 `src/` 하위에 만들지 않는다.\n"
-        "\n"
-        "## Code Style\n"
-        "- 새 코드는 같은 디렉터리의 기존 패턴, 네이밍, 파일 구조를 우선 따른다.\n"
-        "- 프로젝트에 이미 명확한 네이밍 관례가 없으면 변수와 함수는 camelCase를 기본으로 한다.\n"
-        "- 함수 이름은 가능하면 동사 또는 동사구로 시작한다. 예: `loadConfig`, `validateInput`, `renderItem`.\n"
-        "- Boolean 값과 Boolean 반환 함수는 `is`, `has`, `can`, `should` 같은 의미 있는 접두사를 사용한다.\n"
-        "- 이벤트 핸들러는 `handle` 또는 기존 프로젝트의 이벤트 네이밍 패턴을 따른다.\n"
-        "- 값을 변환하는 함수는 `to`, `from`, `parse`, `format`, `normalize`처럼 변환 의도가 드러나는 이름을 사용한다.\n"
-        "- 데이터를 가져오는 함수는 `get`, `load`, `fetch`, `read` 중 실제 동작에 맞는 동사를 사용한다.\n"
-        "- 부수효과가 있는 함수는 `save`, `write`, `update`, `delete`, `send`, `create`처럼 변경 의도가 드러나는 동사를 사용한다.\n"
-        "- 구현이 30줄을 넘어가면 함수나 작은 단위로 분리한다.\n"
-        "\n"
-        "## Reliability\n"
-        "- 외부 입력, 파일, 네트워크, 프로세스 실행 결과는 실패 가능성을 명시적으로 처리한다.\n",
-        encoding="utf-8",
-    )
+    return history_core.ensure_project_contract_file(globals())
 
 
 def project_contract_prompt_text() -> str:
-    ensure_project_contract_file()
-    path = project_contract_path()
-    text = path.read_text(encoding="utf-8").strip()
-    if not text:
-        return (
-            "## Project Contract\n"
-            "No approved project contract exists yet. Follow the existing codebase conventions.\n"
-        )
-    return f"## Project Contract\nSource: {rel(path)}\n\n{text}\n"
+    return history_core.project_contract_prompt_text(globals())
 
 
 def warn_pending_pc_candidates_for_new_run() -> None:
-    pending = pending_pc_candidates()
-    if not pending:
-        return
-    lines = [
-        color_text("Project Contract 후보 경고", "yellow", "bold"),
-        "",
-        (
-            "미정 상태의 Project Contract 후보가 "
-            f"{color_text(str(len(pending)), 'yellow', 'bold')}개 있습니다."
-        ),
-        "새 파이프라인은 계속 시작하지만, 시간이 날 때 후보를 검토해 프로젝트 규약을 정리하세요.",
-        "",
-        color_text("선택 검토 명령:", "green", "bold"),
-        "  python .ai\\pc_review.py",
-        "  python .ai\\pc_review.py --agent claude  # optional: codex/claude/agy",
-        "",
-        color_text("미정 후보:", "yellow", "bold"),
-    ]
-    for item in pending[:20]:
-        lines.append(
-            "  - "
-            f"{item.get('id', '-')}: "
-            f"{compact_history_text(item.get('rule_candidate') or item.get('summary'), max_len=160)}"
-        )
-    if len(pending) > 20:
-        lines.append(f"  - ... and {len(pending) - 20} more")
-    print("\n".join(lines), file=sys.stderr)
+    return history_core.warn_pending_pc_candidates_for_new_run(globals())
 
 
 def ensure_history_store() -> bool:
-    initialized = not HISTORY_DIR.exists()
-    HISTORY_DIR.mkdir(parents=True, exist_ok=True)
-    if not history_index_path().exists():
-        write_json_file(history_index_path(), {"schema_version": HISTORY_SCHEMA_VERSION, "features": []})
-        initialized = True
-    if not pc_candidates_path().exists():
-        write_pc_candidates_store(empty_pc_candidates_store())
-        initialized = True
-    if not history_summary_path().exists():
-        history_summary_path().write_text(
-            "# 프로젝트 히스토리\n\n"
-            "로컬 하네스가 자동 생성한 완료 run 인덱스 요약입니다.\n",
-            encoding="utf-8",
-        )
-        initialized = True
-    return initialized
+    return history_core.ensure_history_store(globals())
 
 
 def history_timestamp_id(value: Any) -> str:
-    stamp = re.sub(r"\D+", "", str(value or ""))[:14]
-    return stamp or now_stamp().replace("-", "")
+    return history_core.history_timestamp_id(globals(), value)
 
 
 def history_event_id(state: dict[str, Any]) -> str:
-    feature = slugify(str(state.get("feature_name") or "feature"))
-    pipeline = slugify(str(state.get("pipeline_mode") or PIPELINE_MODE))
-    return f"{history_timestamp_id(state.get('created_at'))}-{feature}-{pipeline}"
-
-
-def compact_history_text(value: Any, max_len: int = 240) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, (dict, list)):
-        text = json.dumps(value, ensure_ascii=False, sort_keys=True)
-    else:
-        text = str(value)
-    text = re.sub(r"\s+", " ", text).strip()
-    if text.lower() in {"", "none", "n/a", "na", "null", "[]", "{}"}:
-        return ""
-    if len(text) > max_len:
-        return text[: max_len - 3].rstrip() + "..."
-    return text
-
-
-def history_list(value: Any, max_items: int = 40) -> list[str]:
-    items: list[str] = []
-
-    def add(item: Any) -> None:
-        if isinstance(item, list):
-            for child in item:
-                add(child)
-            return
-        if isinstance(item, dict):
-            title = (
-                item.get("title")
-                or item.get("summary")
-                or item.get("description")
-                or item.get("risk")
-                or item.get("decision")
-                or item
-            )
-            text = compact_history_text(title)
-        else:
-            text = compact_history_text(item)
-        if text and text not in items:
-            items.append(text)
-
-    add(value)
-    return items[:max_items]
-
-
-def history_object_list(value: Any, title_keys: list[str], max_items: int = 40) -> list[dict[str, Any]]:
-    objects: list[dict[str, Any]] = []
-
-    def add(item: Any) -> None:
-        if isinstance(item, list):
-            for child in item:
-                add(child)
-            return
-        if isinstance(item, dict):
-            copied = dict(item)
-            title = next((copied.get(key) for key in title_keys if copied.get(key)), None)
-            copied["title"] = compact_history_text(title or copied.get("title") or copied)
-        else:
-            copied = {"title": compact_history_text(item)}
-        if copied["title"] and copied["title"] not in {obj.get("title") for obj in objects}:
-            objects.append(copied)
-
-    add(value)
-    return objects[:max_items]
-
-
-def markdown_sections(text: str) -> dict[str, str]:
-    sections: dict[str, list[str]] = {}
-    current: str | None = None
-    for line in text.splitlines():
-        match = re.match(r"^##+\s+(.+?)\s*$", line)
-        if match:
-            current = match.group(1).strip()
-            sections.setdefault(current, [])
-            continue
-        if current:
-            sections[current].append(line)
-    return {key: "\n".join(lines).strip() for key, lines in sections.items()}
-
-
-def section_matches(heading: str, needles: list[str]) -> bool:
-    lower = heading.lower()
-    return any(needle.lower() in lower for needle in needles)
-
-
-def markdown_section_items(text: str, heading_needles: list[str], max_items: int = 20) -> list[str]:
-    items: list[str] = []
-    for heading, body in markdown_sections(text).items():
-        if not section_matches(heading, heading_needles):
-            continue
-        in_fence = False
-        for raw_line in body.splitlines():
-            line = raw_line.strip()
-            if line.startswith("```"):
-                in_fence = not in_fence
-                continue
-            if in_fence or not line or line.startswith("|") or set(line) <= {"-", " "}:
-                continue
-            if line.startswith("- "):
-                line = line[2:].strip()
-            elif line.startswith("* "):
-                line = line[2:].strip()
-            elif re.match(r"^\d+\.\s+", line):
-                line = re.sub(r"^\d+\.\s+", "", line).strip()
-            elif items:
-                continue
-            text_item = compact_history_text(line)
-            if text_item and text_item not in items:
-                items.append(text_item)
-            if len(items) >= max_items:
-                return items
-    return items
+    return history_core.history_event_id(globals(), state)
 
 
 def safe_stage_text(feature: str, stage: str) -> str:
-    path = stage_output_path(feature, stage)
-    if not path.exists():
-        return ""
-    try:
-        return path.read_text(encoding="utf-8")
-    except OSError:
-        return ""
+    return history_core.safe_stage_text(globals(), feature, stage)
 
 
 def load_history_stage_results(feature: str) -> dict[str, dict[str, Any]]:
-    results: dict[str, dict[str, Any]] = {}
-    for stage in STAGES:
-        result_path = stage_result_json_path(feature, stage)
-        if result_path.exists():
-            parsed = read_json_file(result_path, {})
-            if isinstance(parsed, dict):
-                results[stage] = parsed
-                continue
-        text = safe_stage_text(feature, stage)
-        if text:
-            parsed = find_stage_result(text)
-            if parsed:
-                results[stage] = parsed
-    return results
+    return history_core.load_history_stage_results(globals(), feature)
 
 
 def history_source_artifacts(feature: str) -> list[str]:
-    artifacts: list[str] = []
-    for stage in STAGES:
-        for path in [stage_output_path(feature, stage), stage_result_json_path(feature, stage)]:
-            if path.exists():
-                artifacts.append(rel(path))
-    latest = latest_verification_result_path(feature)
-    if latest.exists():
-        artifacts.append(rel(latest))
-    run_json = state_path(feature)
-    if run_json.exists():
-        artifacts.append(rel(run_json))
-    return sorted(dict.fromkeys(artifacts))
+    return history_core.history_source_artifacts(globals(), feature)
 
 
 def split_event_paths(value: Any) -> list[str]:
-    if isinstance(value, list):
-        return [norm_repo_path(str(item)) for item in value if str(item).strip()]
-    if not isinstance(value, str):
-        return []
-    return [norm_repo_path(part.strip()) for part in value.split(",") if part.strip()]
+    return history_core.split_event_paths(globals(), value)
 
 
 def collect_history_changed_files(
     state: dict[str, Any],
     stage_results: dict[str, dict[str, Any]],
 ) -> dict[str, list[str]]:
-    paths: list[str] = []
-    for result in stage_results.values():
-        paths.extend(history_list(result.get("changed_files"), max_items=200))
-        paths.extend(history_list(result.get("produced_files"), max_items=200))
-    for event in state.get("events", []):
-        if not isinstance(event, dict):
-            continue
-        if event.get("event") in {"commit_start", "commit_created", "commit_amended"}:
-            paths.extend(split_event_paths(event.get("paths")))
-
-    grouped = {"production": [], "tests": [], "harness_artifacts": [], "docs": [], "other": []}
-    for raw_path in paths:
-        path = norm_repo_path(raw_path)
-        if not path or path in {".", "./"}:
-            continue
-        if path.startswith(".ai/docs/"):
-            bucket = "docs"
-        elif path.startswith(".ai/"):
-            bucket = "harness_artifacts"
-        elif is_test_path(path):
-            bucket = "tests"
-        elif is_production_code_path(path):
-            bucket = "production"
-        else:
-            bucket = "other"
-        if path not in grouped[bucket]:
-            grouped[bucket].append(path)
-    return {key: sorted(value) for key, value in grouped.items() if value}
+    return history_core.collect_history_changed_files(globals(), state, stage_results)
 
 
 def load_history_verification(feature: str, stage_results: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    latest = latest_verification_result_path(feature)
-    if latest.exists():
-        parsed = read_json_file(latest, {})
-        if isinstance(parsed, dict) and parsed:
-            return {
-                "status": parsed.get("status", "UNKNOWN"),
-                "passed": bool(parsed.get("passed")),
-                "failed_commands": parsed.get("failed_commands", []),
-                "commands": [
-                    command.get("name")
-                    for command in parsed.get("commands", [])
-                    if isinstance(command, dict) and command.get("name")
-                ],
-                "source": rel(latest),
-            }
-
-    verify_result = stage_results.get(VERIFY_STAGE, {})
-    summary = verify_result.get("verification_summary")
-    if isinstance(summary, dict):
-        return {
-            "status": summary.get("status", verify_result.get("status", "UNKNOWN")),
-            "passed": str(summary.get("status", "")).upper() == "PASS",
-            "failed_commands": [],
-            "commands": [key for key in summary.keys() if key != "status"],
-            "source": rel(stage_result_json_path(feature, VERIFY_STAGE)),
-        }
-    return {
-        "status": verify_result.get("status", "UNKNOWN"),
-        "passed": str(verify_result.get("status", "")).upper() == "PASS",
-        "failed_commands": [],
-        "commands": [],
-        "source": rel(stage_result_json_path(feature, VERIFY_STAGE))
-        if stage_result_json_path(feature, VERIFY_STAGE).exists()
-        else "",
-    }
+    return history_core.load_history_verification(globals(), feature, stage_results)
 
 
 def collect_history_notes(
     feature: str,
     stage_results: dict[str, dict[str, Any]],
 ) -> tuple[list[str], list[dict[str, Any]], list[str], list[dict[str, Any]]]:
-    implemented: list[str] = []
-    risks: list[dict[str, Any]] = []
-    future_improvements: list[str] = []
-    decisions: list[dict[str, Any]] = []
-
-    for stage, result in stage_results.items():
-        source = rel(stage_output_path(feature, stage)) if stage_output_path(feature, stage).exists() else ""
-        notes = result.get("history_notes") if isinstance(result.get("history_notes"), dict) else {}
-        implemented.extend(history_list(result.get("implemented")))
-        implemented.extend(history_list(notes.get("implemented") if notes else None))
-        future_improvements.extend(history_list(result.get("future_improvements")))
-        future_improvements.extend(history_list(notes.get("future_improvements") if notes else None))
-
-        for item in history_object_list(result.get("risks"), ["title", "summary", "description", "risk"]) + history_object_list(
-            notes.get("risks") if notes else None,
-            ["title", "summary", "description", "risk"],
-        ):
-            item.setdefault("category", "risk")
-            item["source_stage"] = item.get("source_stage") or stage
-            item["source_artifact"] = item.get("source_artifact") or source
-            risks.append(item)
-        for item in history_object_list(result.get("known_limitations"), ["title", "summary", "description", "risk"]):
-            item.setdefault("category", "known_limitation")
-            item["source_stage"] = item.get("source_stage") or stage
-            item["source_artifact"] = item.get("source_artifact") or source
-            risks.append(item)
-
-        fix_inputs = result.get("fix_inputs")
-        if isinstance(fix_inputs, dict):
-            deferred = history_list(fix_inputs.get("deferred"))
-            future_improvements.extend(deferred)
-            for item in deferred:
-                risks.append(
-                    {
-                        "title": item,
-                        "category": "future_improvement",
-                        "source_stage": stage,
-                        "source_artifact": source,
-                    }
-                )
-
-        for item in history_object_list(result.get("decisions"), ["title", "summary", "description", "decision"]) + history_object_list(
-            notes.get("decisions") if notes else None,
-            ["title", "summary", "description", "decision"],
-        ):
-            item["source_stage"] = item.get("source_stage") or stage
-            item["source_artifact"] = item.get("source_artifact") or source
-            decisions.append(item)
-
-        text = safe_stage_text(feature, stage)
-        implemented.extend(
-            markdown_section_items(
-                text,
-                ["implementation summary", "implemented", "implementation details", "changed files"],
-            )
-        )
-        future_from_text = markdown_section_items(
-            text,
-            ["future", "follow-up", "known limitation", "remaining risk", "deferred"],
-        )
-        future_improvements.extend(future_from_text)
-        for item in future_from_text:
-            risks.append(
-                {
-                    "title": item,
-                    "category": "future_improvement",
-                    "source_stage": stage,
-                    "source_artifact": source,
-                }
-            )
-        for item in markdown_section_items(text, ["decision", "why", "alternative", "plan changed"]):
-            decisions.append({"title": item, "source_stage": stage, "source_artifact": source})
-
-    implemented = list(dict.fromkeys(item for item in implemented if item))
-    future_improvements = list(dict.fromkeys(item for item in future_improvements if item))
-
-    seen_risks: set[str] = set()
-    deduped_risks: list[dict[str, Any]] = []
-    for risk in risks:
-        title = compact_history_text(risk.get("title"))
-        if not title or title in seen_risks:
-            continue
-        seen_risks.add(title)
-        risk["title"] = title
-        deduped_risks.append(risk)
-
-    seen_decisions: set[str] = set()
-    deduped_decisions: list[dict[str, Any]] = []
-    for decision in decisions:
-        title = compact_history_text(decision.get("title"))
-        if not title or title in seen_decisions:
-            continue
-        seen_decisions.add(title)
-        decision["title"] = title
-        deduped_decisions.append(decision)
-
-    return implemented[:40], deduped_risks[:40], future_improvements[:40], deduped_decisions[:40]
+    return history_core.collect_history_notes(globals(), feature, stage_results)
 
 
 def normalize_unresolved_source_item(
@@ -1892,54 +975,7 @@ def normalize_unresolved_source_item(
     source_artifact: str,
     default_severity: str = "info",
 ) -> dict[str, Any] | None:
-    if isinstance(item, dict):
-        title = compact_history_text(
-            item.get("title")
-            or item.get("summary")
-            or item.get("description")
-            or item.get("finding")
-            or item.get("warning")
-            or item.get("item")
-            or item
-        )
-        reason = compact_history_text(
-            item.get("reason_not_actioned")
-            or item.get("reason")
-            or item.get("rationale")
-            or item.get("rejection_reason")
-            or item.get("defer_reason")
-            or item.get("why")
-        )
-        future_action = compact_history_text(
-            item.get("future_action")
-            or item.get("future_improvement")
-            or item.get("next_action")
-            or item.get("mitigation")
-        )
-        severity = compact_history_text(item.get("severity") or default_severity, max_len=40)
-        item_type = compact_history_text(item.get("type") or item_type, max_len=80)
-        status = compact_history_text(item.get("status") or status, max_len=40)
-        disposition = compact_history_text(item.get("disposition") or disposition, max_len=80)
-        source_stage = compact_history_text(item.get("source_stage") or source_stage, max_len=80)
-        source_artifact = compact_history_text(item.get("source_artifact") or source_artifact, max_len=300)
-    else:
-        title = compact_history_text(item)
-        reason = ""
-        future_action = ""
-        severity = default_severity
-    if not title:
-        return None
-    return {
-        "title": title,
-        "type": item_type,
-        "severity": severity,
-        "status": status,
-        "disposition": disposition,
-        "reason_not_actioned": reason,
-        "future_action": future_action,
-        "source_stage": source_stage,
-        "source_artifact": source_artifact,
-    }
+    return history_core.normalize_unresolved_source_item(globals(), item, item_type=item_type, status=status, disposition=disposition, source_stage=source_stage, source_artifact=source_artifact, default_severity=default_severity)
 
 
 def unresolved_items_from_value(
@@ -1952,161 +988,18 @@ def unresolved_items_from_value(
     source_artifact: str,
     default_severity: str = "info",
 ) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
-    if value is None:
-        return items
-    raw_items = value if isinstance(value, list) else [value]
-    for raw_item in raw_items:
-        normalized = normalize_unresolved_source_item(
-            raw_item,
-            item_type=item_type,
-            status=status,
-            disposition=disposition,
-            source_stage=source_stage,
-            source_artifact=source_artifact,
-            default_severity=default_severity,
-        )
-        if normalized and normalized["title"] not in {item["title"] for item in items}:
-            items.append(normalized)
-    return items
+    return history_core.unresolved_items_from_value(globals(), value, item_type=item_type, status=status, disposition=disposition, source_stage=source_stage, source_artifact=source_artifact, default_severity=default_severity)
 
 
 def collect_history_unresolved_items(
     feature: str,
     stage_results: dict[str, dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
-    for stage, result in stage_results.items():
-        source = rel(stage_output_path(feature, stage)) if stage_output_path(feature, stage).exists() else ""
-        notes = result.get("history_notes") if isinstance(result.get("history_notes"), dict) else {}
-
-        items.extend(
-            unresolved_items_from_value(
-                result.get("unresolved_items"),
-                item_type="unresolved_item",
-                status="open",
-                disposition="not_actioned",
-                source_stage=stage,
-                source_artifact=source,
-                default_severity="medium",
-            )
-        )
-        items.extend(
-            unresolved_items_from_value(
-                notes.get("unresolved_items") if notes else None,
-                item_type="unresolved_item",
-                status="open",
-                disposition="not_actioned",
-                source_stage=stage,
-                source_artifact=source,
-                default_severity="medium",
-            )
-        )
-        items.extend(
-            unresolved_items_from_value(
-                result.get("warnings") or result.get("warning"),
-                item_type="warning",
-                status="open",
-                disposition="warning_only",
-                source_stage=stage,
-                source_artifact=source,
-                default_severity="minor",
-            )
-        )
-
-        fix_inputs = result.get("fix_inputs")
-        if isinstance(fix_inputs, dict):
-            items.extend(
-                unresolved_items_from_value(
-                    fix_inputs.get("rejected"),
-                    item_type="review_finding",
-                    status="rejected",
-                    disposition="rejected",
-                    source_stage=stage,
-                    source_artifact=source,
-                    default_severity="minor",
-                )
-            )
-            items.extend(
-                unresolved_items_from_value(
-                    fix_inputs.get("deferred"),
-                    item_type="review_finding",
-                    status="deferred",
-                    disposition="deferred",
-                    source_stage=stage,
-                    source_artifact=source,
-                    default_severity="minor",
-                )
-            )
-            items.extend(
-                unresolved_items_from_value(
-                    fix_inputs.get("warnings"),
-                    item_type="verification_warning",
-                    status="open",
-                    disposition="warning_only",
-                    source_stage=stage,
-                    source_artifact=source,
-                    default_severity="minor",
-                )
-            )
-
-        verification_summary = result.get("verification_summary")
-        if isinstance(verification_summary, dict):
-            notes_value = verification_summary.get("notes") or verification_summary.get("warning")
-            if notes_value and str(result.get("status") or "").upper() == "PASS":
-                items.extend(
-                    unresolved_items_from_value(
-                        notes_value,
-                        item_type="verification_note",
-                        status="accepted",
-                        disposition="pass_with_note",
-                        source_stage=stage,
-                        source_artifact=source,
-                        default_severity="info",
-                    )
-                )
-
-        text = safe_stage_text(feature, stage)
-        for heading_needles, item_type, status, disposition, severity in [
-            (["거부", "rejected", "not accepted"], "review_finding", "rejected", "rejected", "minor"),
-            (["보류", "deferred", "future", "follow-up"], "review_finding", "deferred", "deferred", "minor"),
-            (["warning", "경고"], "warning", "open", "warning_only", "minor"),
-            (["should_consider", "minor", "nit"], "review_suggestion", "open", "not_actioned", "minor"),
-        ]:
-            for item in markdown_section_items(text, heading_needles, max_items=10):
-                normalized = normalize_unresolved_source_item(
-                    item,
-                    item_type=item_type,
-                    status=status,
-                    disposition=disposition,
-                    source_stage=stage,
-                    source_artifact=source,
-                    default_severity=severity,
-                )
-                if normalized:
-                    items.append(normalized)
-
-    seen: set[str] = set()
-    deduped: list[dict[str, Any]] = []
-    for item in items:
-        key = "|".join(
-            [
-                compact_history_text(item.get("title"), max_len=500),
-                compact_history_text(item.get("type"), max_len=80),
-                compact_history_text(item.get("source_stage"), max_len=80),
-            ]
-        )
-        if not key.strip("|") or key in seen:
-            continue
-        seen.add(key)
-        deduped.append(item)
-    return deduped[:80]
+    return history_core.collect_history_unresolved_items(globals(), feature, stage_results)
 
 
 def stable_history_id(prefix: str, *parts: Any) -> str:
-    raw = "\n".join(compact_history_text(part, max_len=1000) for part in parts)
-    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
-    return f"{prefix}-{digest}"
+    return history_core.stable_history_id(globals(), prefix, *parts)
 
 
 def normalize_history_risk(
@@ -2117,85 +1010,11 @@ def normalize_history_risk(
     created_at: str,
     default_severity: str,
 ) -> dict[str, Any]:
-    title = compact_history_text(item.get("title") or item.get("summary") or item.get("description"))
-    category = compact_history_text(item.get("category") or "risk", max_len=80)
-    source_artifact = compact_history_text(item.get("source_artifact"), max_len=300)
-    risk_id = compact_history_text(item.get("risk_id"), max_len=120) or stable_history_id(
-        "risk",
-        feature,
-        category,
-        title,
-    )
-    risk = {
-        "risk_id": risk_id,
-        "제목": title,
-        "설명": compact_history_text(item.get("description") or item.get("mitigation") or item.get("future_action") or title),
-        "title": title,
-        "category": category,
-        "severity": compact_history_text(item.get("severity") or default_severity, max_len=40),
-        "status": compact_history_text(item.get("status") or "open", max_len=40),
-        "introduced_by": feature,
-        "last_seen_by": event_id,
-        "source_stage": compact_history_text(item.get("source_stage"), max_len=80),
-        "source_artifacts": [source_artifact] if source_artifact else [],
-        "created_at": created_at,
-        "updated_at": created_at,
-    }
-    return risk
+    return history_core.normalize_history_risk(globals(), item, feature=feature, event_id=event_id, created_at=created_at, default_severity=default_severity)
 
 
 def update_history_risks(event: dict[str, Any]) -> list[dict[str, Any]]:
-    existing = read_json_file(history_risks_path(), {"schema_version": HISTORY_SCHEMA_VERSION, "risks": []})
-    if not isinstance(existing, dict):
-        existing = {"schema_version": HISTORY_SCHEMA_VERSION, "risks": []}
-    risks = existing.get("risks")
-    if not isinstance(risks, list):
-        risks = []
-
-    by_id: dict[str, dict[str, Any]] = {
-        str(item.get("risk_id")): item for item in risks if isinstance(item, dict) and item.get("risk_id")
-    }
-    default_severity = compact_history_text(event.get("risk_level") or "medium", max_len=40)
-    for item in event.get("risks", []):
-        if not isinstance(item, dict):
-            continue
-        normalized = normalize_history_risk(
-            item,
-            feature=str(event.get("feature") or ""),
-            event_id=str(event.get("event_id") or ""),
-            created_at=str(event.get("completed_at") or iso_now()),
-            default_severity=default_severity,
-        )
-        risk_id = normalized["risk_id"]
-        if risk_id in by_id:
-            current = by_id[risk_id]
-            current.update(
-                {
-                    "제목": normalized["제목"],
-                    "설명": normalized["설명"],
-                    "title": normalized["title"],
-                    "category": normalized["category"],
-                    "severity": normalized["severity"] or current.get("severity", ""),
-                    "last_seen_by": normalized["last_seen_by"],
-                    "source_stage": normalized["source_stage"],
-                    "updated_at": normalized["updated_at"],
-                }
-            )
-            existing_sources = current.get("source_artifacts")
-            if not isinstance(existing_sources, list):
-                existing_sources = []
-            for source in normalized["source_artifacts"]:
-                if source not in existing_sources:
-                    existing_sources.append(source)
-            current["source_artifacts"] = existing_sources
-            if not current.get("status"):
-                current["status"] = "open"
-        else:
-            by_id[risk_id] = normalized
-
-    updated = sorted(by_id.values(), key=lambda item: (str(item.get("status")), str(item.get("updated_at")), str(item.get("risk_id"))))
-    write_json_file(history_risks_path(), {"schema_version": HISTORY_SCHEMA_VERSION, "risks": updated})
-    return updated
+    return history_core.update_history_risks(globals(), event)
 
 
 def normalize_history_unresolved_item(
@@ -2205,448 +1024,59 @@ def normalize_history_unresolved_item(
     event_id: str,
     created_at: str,
 ) -> dict[str, Any]:
-    title = compact_history_text(item.get("title") or item.get("summary") or item.get("description"))
-    item_type = compact_history_text(item.get("type") or "unresolved_item", max_len=80)
-    source_stage = compact_history_text(item.get("source_stage"), max_len=80)
-    source_artifact = compact_history_text(item.get("source_artifact"), max_len=300)
-    item_id = compact_history_text(item.get("item_id"), max_len=120) or stable_history_id(
-        "item",
-        feature,
-        item_type,
-        source_stage,
-        title,
-    )
-    return {
-        "item_id": item_id,
-        "제목": title,
-        "설명": compact_history_text(
-            item.get("description")
-            or item.get("reason_not_actioned")
-            or item.get("future_action")
-            or title
-        ),
-        "feature": feature,
-        "type": item_type,
-        "severity": compact_history_text(item.get("severity") or "minor", max_len=40),
-        "status": compact_history_text(item.get("status") or "open", max_len=40),
-        "disposition": compact_history_text(item.get("disposition") or "not_actioned", max_len=80),
-        "title": title,
-        "reason_not_actioned": compact_history_text(item.get("reason_not_actioned")),
-        "future_action": compact_history_text(item.get("future_action")),
-        "source_stage": source_stage,
-        "source_artifact": source_artifact,
-        "introduced_by": feature,
-        "last_seen_by": event_id,
-        "created_at": created_at,
-        "updated_at": created_at,
-    }
+    return history_core.normalize_history_unresolved_item(globals(), item, feature=feature, event_id=event_id, created_at=created_at)
 
 
 def update_history_unresolved_items(event: dict[str, Any]) -> list[dict[str, Any]]:
-    existing = read_json_file(
-        history_unresolved_items_path(),
-        {"schema_version": HISTORY_SCHEMA_VERSION, "items": []},
-    )
-    if not isinstance(existing, dict):
-        existing = {"schema_version": HISTORY_SCHEMA_VERSION, "items": []}
-    items = existing.get("items")
-    if not isinstance(items, list):
-        items = []
-
-    by_id: dict[str, dict[str, Any]] = {
-        str(item.get("item_id")): item for item in items if isinstance(item, dict) and item.get("item_id")
-    }
-    for item in event.get("unresolved_items", []):
-        if not isinstance(item, dict):
-            continue
-        normalized = normalize_history_unresolved_item(
-            item,
-            feature=str(event.get("feature") or ""),
-            event_id=str(event.get("event_id") or ""),
-            created_at=str(event.get("completed_at") or iso_now()),
-        )
-        item_id = normalized["item_id"]
-        if item_id in by_id:
-            current = by_id[item_id]
-            created_at = current.get("created_at") or normalized["created_at"]
-            current.update(normalized)
-            current["created_at"] = created_at
-        else:
-            by_id[item_id] = normalized
-
-    active_order = {"open": "0", "deferred": "1", "accepted": "2", "rejected": "3", "closed": "4"}
-    updated = sorted(
-        by_id.values(),
-        key=lambda item: (
-            active_order.get(str(item.get("status") or "").lower(), "9"),
-            str(item.get("updated_at")),
-            str(item.get("item_id")),
-        ),
-    )
-    write_json_file(
-        history_unresolved_items_path(),
-        {"schema_version": HISTORY_SCHEMA_VERSION, "items": updated},
-    )
-    return updated
+    return history_core.update_history_unresolved_items(globals(), event)
 
 
 def append_history_decisions(event: dict[str, Any]) -> list[dict[str, Any]]:
-    appended: list[dict[str, Any]] = []
-    completed_at = str(event.get("completed_at") or iso_now())
-    for raw in event.get("decisions", []):
-        if not isinstance(raw, dict):
-            continue
-        title = compact_history_text(raw.get("title"))
-        if not title:
-            continue
-        decision = {
-            "schema_version": HISTORY_SCHEMA_VERSION,
-            "decision_id": compact_history_text(raw.get("decision_id"), max_len=120)
-            or stable_history_id("decision", event.get("feature"), title),
-            "제목": title,
-            "설명": compact_history_text(raw.get("reason") or title),
-            "feature": event.get("feature"),
-            "event_id": event.get("event_id"),
-            "title": title,
-            "reason": compact_history_text(raw.get("reason")),
-            "source_stage": compact_history_text(raw.get("source_stage"), max_len=80),
-            "source_artifact": compact_history_text(raw.get("source_artifact"), max_len=300),
-            "created_at": completed_at,
-        }
-        if append_jsonl_if_missing(history_decisions_path(), decision, "decision_id"):
-            appended.append(decision)
-    return appended
+    return history_core.append_history_decisions(globals(), event)
 
 
 def update_history_feature_summary(event: dict[str, Any]) -> dict[str, Any]:
-    feature = str(event.get("feature") or "")
-    path = history_features_dir() / f"{feature}.json"
-    existing = read_json_file(path, {})
-    if not isinstance(existing, dict):
-        existing = {}
-
-    event_id = str(event.get("event_id") or "")
-    event_ids = existing.get("event_ids")
-    if not isinstance(event_ids, list):
-        event_ids = []
-    if event_id and event_id not in event_ids:
-        event_ids.append(event_id)
-
-    runs = existing.get("runs")
-    if not isinstance(runs, list):
-        runs = []
-    if event_id and not any(isinstance(item, dict) and item.get("event_id") == event_id for item in runs):
-        runs.append(
-            {
-                "event_id": event_id,
-                "status": event.get("status"),
-                "pipeline": event.get("pipeline"),
-                "completed_at": event.get("completed_at"),
-                "commits": event.get("commits", {}),
-                "verification": event.get("verification", {}),
-            }
-        )
-
-    summary = {
-        "schema_version": HISTORY_SCHEMA_VERSION,
-        "제목": f"{feature} 기능 요약",
-        "설명": compact_history_text(event.get("request_summary"), max_len=800),
-        "feature": feature,
-        "first_seen_at": existing.get("first_seen_at") or event.get("completed_at"),
-        "last_completed_at": event.get("completed_at"),
-        "latest_event_id": event_id,
-        "event_ids": event_ids,
-        "request_summary": event.get("request_summary", ""),
-        "latest_status": event.get("status", ""),
-        "latest_pipeline": event.get("pipeline", ""),
-        "implemented": event.get("implemented", []),
-        "future_improvements": event.get("future_improvements", []),
-        "unresolved_items": event.get("unresolved_items", []),
-        "changed_files": event.get("changed_files", {}),
-        "commits": event.get("commits", {}),
-        "source_artifacts": event.get("source_artifacts", []),
-        "runs": runs[-20:],
-        "updated_at": iso_now(),
-    }
-    write_json_file(path, summary)
-    return summary
+    return history_core.update_history_feature_summary(globals(), event)
 
 
 def read_history_index() -> dict[str, Any]:
-    index = read_json_file(history_index_path(), {"schema_version": HISTORY_SCHEMA_VERSION, "features": []})
-    if not isinstance(index, dict):
-        return {"schema_version": HISTORY_SCHEMA_VERSION, "features": []}
-    features = index.get("features")
-    if not isinstance(features, list):
-        index["features"] = []
-    else:
-        index["features"] = [item for item in features if isinstance(item, dict)]
-    index["schema_version"] = HISTORY_SCHEMA_VERSION
-    return index
+    return history_core.read_history_index(globals())
 
 
 def write_history_index(index: dict[str, Any]) -> None:
-    write_json_file(history_index_path(), index)
+    return history_core.write_history_index(globals(), index)
 
 
 def compact_history_titles(items: list[Any], max_items: int = 5, max_len: int = 180) -> list[str]:
-    if max_items <= 0:
-        return []
-    titles: list[str] = []
-    for item in items:
-        if isinstance(item, dict):
-            value = (
-                item.get("title")
-                or item.get("summary")
-                or item.get("description")
-                or item.get("decision")
-                or item.get("risk")
-            )
-        else:
-            value = item
-        title = compact_history_text(value, max_len=max_len)
-        if title and title not in titles:
-            titles.append(title)
-        if len(titles) >= max_items:
-            break
-    return titles
+    return history_core.compact_history_titles(globals(), items, max_items, max_len)
 
 
 def history_document_path(feature: str) -> str:
-    if not DOCUMENT_STAGE:
-        return ""
-    doc = expected_docx_path(feature)
-    return rel(doc) if doc.exists() else ""
+    return history_core.history_document_path(globals(), feature)
 
 
 def upsert_history_index_entry(entry: dict[str, Any]) -> tuple[dict[str, Any], bool]:
-    index = read_history_index()
-    features = index.setdefault("features", [])
-    feature = str(entry.get("feature") or "")
-    replaced = False
-    for position, existing in enumerate(features):
-        if isinstance(existing, dict) and existing.get("feature") == feature:
-            features[position] = entry
-            replaced = True
-            break
-    if not replaced:
-        features.append(entry)
-    features.sort(key=lambda item: str(item.get("completed_at") or ""), reverse=True)
-    index["updated_at"] = iso_now()
-    write_history_index(index)
-    return index, not replaced
+    return history_core.upsert_history_index_entry(globals(), entry)
 
 
 def render_history_summary(index: dict[str, Any]) -> None:
-    features = index.get("features") if isinstance(index.get("features"), list) else []
-    complete_features = [item for item in features if isinstance(item, dict)]
-    lines = [
-        "# 프로젝트 히스토리",
-        "",
-        "로컬 하네스가 자동 생성한 완료 run 인덱스 요약입니다.",
-        "",
-        f"- 기록된 feature: {len(complete_features)}",
-        f"- 인덱스: {rel(history_index_path())}",
-        f"- PC 후보: {rel(pc_candidates_path())}",
-        "",
-        "## 최근 완료 Run",
-        "",
-    ]
-    if not complete_features:
-        lines.append("- 없음")
-    for entry in complete_features[:20]:
-        verification = str(entry.get("verification") or "UNKNOWN")
-        lines.append(
-            "- "
-            f"{entry.get('completed_at', '')} "
-            f"{entry.get('feature', '')} "
-            f"({entry.get('pipeline', '')}, {entry.get('status', '')}, verify={verification})"
-        )
-        implemented = entry.get("implemented") if isinstance(entry.get("implemented"), list) else []
-        for item in implemented[:3]:
-            lines.append(f"  - {item}")
-    history_summary_path().write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    return history_core.render_history_summary(globals(), index)
 
 
 def record_project_history(state: dict[str, Any]) -> dict[str, Any]:
-    initialized = ensure_history_store()
-    feature = str(state["feature_name"])
-    stage_results = load_history_stage_results(feature)
-    implemented, risks, future_improvements, decisions = collect_history_notes(feature, stage_results)
-    verification = load_history_verification(feature, stage_results)
-    completed_at = iso_now()
-    event_id = history_event_id(state)
-    risk_levels = [
-        compact_history_text(result.get("risk_level"), max_len=40)
-        for result in stage_results.values()
-        if result.get("risk_level")
-    ]
-    risk_level = risk_levels[-1] if risk_levels else ""
-
-    important_followups = compact_history_titles(future_improvements, max_items=5)
-    medium_high_risks = [
-        risk
-        for risk in risks
-        if isinstance(risk, dict)
-        and str(risk.get("severity") or "low").strip().lower() in {"medium", "high", "critical"}
-    ]
-    important_followups.extend(
-        item
-        for item in compact_history_titles(medium_high_risks, max_items=5 - len(important_followups))
-        if item not in important_followups
-    )
-
-    entry = {
-        "schema_version": HISTORY_SCHEMA_VERSION,
-        "event_id": event_id,
-        "feature": feature,
-        "pipeline": state.get("pipeline_mode") or PIPELINE_MODE,
-        "status": state.get("status"),
-        "created_at": state.get("created_at"),
-        "completed_at": completed_at,
-        "request_summary": compact_history_text(state.get("request"), max_len=800),
-        "verification": verification.get("status", "UNKNOWN") if isinstance(verification, dict) else "UNKNOWN",
-        "verification_source": verification.get("source", "") if isinstance(verification, dict) else "",
-        "risk_level": risk_level,
-        "feature_dir": rel(feature_dir(feature)),
-        "run_dir": rel(run_dir(feature)),
-        "doc": history_document_path(feature),
-        "commits": state.get("commits", {}),
-        "implemented": compact_history_titles(implemented, max_items=8),
-        "important_followups": important_followups[:5],
-        "important_decisions": compact_history_titles(decisions, max_items=5),
-    }
-
-    index, inserted = upsert_history_index_entry(entry)
-    render_history_summary(index)
-
-    state["history"] = {
-        "schema_version": HISTORY_SCHEMA_VERSION,
-        "event_id": event_id,
-        "index": rel(history_index_path()),
-        "summary": rel(history_summary_path()),
-        "status": "recorded" if inserted else "updated",
-        "recorded_at": completed_at,
-        "history_initialized": initialized,
-    }
-    return state["history"]
+    return history_core.record_project_history(globals(), state)
 
 
 def should_extract_pc_candidates(state: dict[str, Any]) -> bool:
-    return pipeline_extracts_pc_candidates(state.get("pipeline_mode") or PIPELINE_MODE)
+    return history_core.should_extract_pc_candidates(globals(), state)
 
 
 def pc_candidate_source_artifact_text(feature: str, max_chars_per_file: int = 8000) -> str:
-    blocks: list[str] = []
-    for artifact in history_source_artifacts(feature):
-        path = ROOT / artifact
-        if not path.exists() or not path.is_file():
-            continue
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        if len(text) > max_chars_per_file:
-            text = text[:max_chars_per_file] + "\n...[truncated]"
-        blocks.extend([f"### {artifact}", "```text", text, "```", ""])
-    return "\n".join(blocks).strip() or "- none"
+    return history_core.pc_candidate_source_artifact_text(globals(), feature, max_chars_per_file)
 
 
 def build_pc_candidate_extraction_prompt(state: dict[str, Any]) -> str:
-    feature = str(state["feature_name"])
-    stage_results = load_history_stage_results(feature)
-    changed_files = collect_history_changed_files(state, stage_results)
-    verification = load_history_verification(feature, stage_results)
-    current_contract = project_contract_prompt_text()
-    artifacts_text = pc_candidate_source_artifact_text(feature)
-    existing_store = read_pc_candidates_store()
-    existing_rule_candidates = [
-        compact_history_text(item.get("rule_candidate"), max_len=240)
-        for item in existing_store.get("candidates", [])
-        if item.get("rule_candidate")
-    ][-50:]
-
-    return f"""# Project Contract Candidate Extraction
-
-You are extracting Project Contract candidates after a completed local AI development pipeline.
-
-This is not a normal feature implementation task.
-Do not edit files. Return only a JSON object.
-
-## Goal
-Find rules that should become candidates for the long-term Project Contract.
-The Project Contract is observational: it is based on conventions and decisions that emerged from real development.
-
-## Pipeline Context
-- feature_name: {feature}
-- pipeline_mode: {state.get("pipeline_mode") or PIPELINE_MODE}
-- request: {state.get("request", "")}
-- completed_at: {iso_now()}
-
-## Current Approved Project Contract
-{current_contract}
-
-## Existing Candidate Summaries
-{json.dumps(existing_rule_candidates, ensure_ascii=False, indent=2)}
-
-## Changed Files Summary
-{json.dumps(changed_files, ensure_ascii=False, indent=2)}
-
-## Harness Verification
-{json.dumps(verification, ensure_ascii=False, indent=2)}
-
-## Source Artifacts
-{artifacts_text}
-
-## Candidate Criteria
-Create a candidate only when the rule is clearly worth managing as a project-wide contract.
-
-The bar is intentionally high. A candidate must pass all of these:
-- It applies across many future features or pipelines in this repository.
-- It controls project-level engineering behavior, not a local implementation choice.
-- It is likely to recur even when the exact feature, UI screen, or library changes.
-- It is not already clearly covered by the current Project Contract.
-- It belongs to a durable area such as naming, architecture, directory layout, testing policy, error handling, data boundaries, dependency policy, or cross-feature UX policy.
-
-Before emitting anything, classify every observation internally:
-- `project_wide`: broad project rule worth user review as Project Contract.
-- `stack_wide`: useful only for one technology stack, framework, platform, or library.
-- `feature_local`: useful only for this feature or domain.
-- `implementation_detail`: small tactical implementation detail.
-
-Emit only `project_wide` candidates.
-Discard `stack_wide`, `feature_local`, and `implementation_detail`. Do not include them in the JSON.
-
-Do not create candidates for:
-- one-off implementation details
-- framework-specific micro patterns unless the project has clearly standardized that stack globally
-- UI control behavior that is merely a convenience for one screen
-- performance tweaks tied to a single implementation
-- obvious bug fixes
-- temporary code
-- rules already clearly covered by the current Project Contract
-- weak observations with no future impact
-- anything that would be better recorded as history than enforced as a future project rule
-
-## Output Contract
-Return exactly one JSON object. Do not wrap it in Markdown.
-
-Schema:
-{{
-  "candidates": [
-    {{
-      "impact_scope": "project_wide",
-      "category": "architecture | naming | ux | testing | error_handling | data | dependency | other",
-      "rule_candidate": "A concise Korean rule phrased as something future work should do.",
-      "rationale": "Why this is truly project-wide rather than stack-wide, feature-local, or an implementation detail.",
-      "evidence": ["Relevant files, artifacts, or decisions."],
-      "recommended_contract_section": "Hard Rules | Architecture | Naming | UX | Testing | Error Handling | Data | Dependencies | Other"
-    }}
-  ]
-}}
-
-If there are no worthwhile candidates, return {{"candidates": []}}.
-"""
+    return history_core.build_pc_candidate_extraction_prompt(globals(), state)
 
 
 def normalize_pc_candidate(
@@ -2655,201 +1085,23 @@ def normalize_pc_candidate(
     created_at: str,
     provider: str,
 ) -> dict[str, Any] | None:
-    impact_scope = compact_history_text(raw.get("impact_scope") or raw.get("scope"), max_len=80)
-    if impact_scope.strip().lower() != PC_PROJECT_WIDE_SCOPE:
-        return None
-    rule = compact_history_text(raw.get("rule_candidate") or raw.get("summary"), max_len=600)
-    if not rule:
-        return None
-    category = compact_history_text(raw.get("category") or "other", max_len=80) or "other"
-    feature = str(state["feature_name"])
-    candidate_id = stable_history_id("pc", feature, category, rule)
-    evidence = history_list(raw.get("evidence"), max_items=40)
-    return {
-        "id": candidate_id,
-        "status": PC_PENDING_STATUS,
-        "source_feature": feature,
-        "source_pipeline": state.get("pipeline_mode") or PIPELINE_MODE,
-        "source_run_created_at": state.get("created_at", ""),
-        "source_artifacts": history_source_artifacts(feature),
-        "impact_scope": PC_PROJECT_WIDE_SCOPE,
-        "category": category,
-        "rule_candidate": rule,
-        "rationale": compact_history_text(raw.get("rationale"), max_len=1000),
-        "evidence": evidence,
-        "recommended_contract_section": compact_history_text(
-            raw.get("recommended_contract_section"),
-            max_len=120,
-        ),
-        "created_at": created_at,
-        "decided_at": "",
-        "decision_reason": "",
-        "extraction_model": provider,
-    }
+    return history_core.normalize_pc_candidate(globals(), raw, state, created_at, provider)
 
 
 def append_pc_candidates(candidates: list[dict[str, Any]], state: dict[str, Any]) -> dict[str, Any]:
-    store = read_pc_candidates_store()
-    existing_ids = {
-        str(item.get("id"))
-        for item in store.get("candidates", [])
-        if str(item.get("id") or "")
-    }
-    added: list[dict[str, Any]] = []
-    for candidate in candidates:
-        candidate_id = str(candidate.get("id") or "")
-        if not candidate_id or candidate_id in existing_ids:
-            continue
-        store.setdefault("candidates", []).append(candidate)
-        existing_ids.add(candidate_id)
-        added.append(candidate)
-    if added:
-        write_pc_candidates_store(store)
-    return {
-        "status": "recorded",
-        "path": rel(pc_candidates_path()),
-        "added_count": len(added),
-        "added_ids": [item["id"] for item in added],
-    }
+    return history_core.append_pc_candidates(globals(), candidates, state)
 
 
 def extract_project_contract_candidates(state: dict[str, Any]) -> dict[str, Any]:
-    if not should_extract_pc_candidates(state):
-        return {"status": "skipped", "reason": "pipeline does not extract PC candidates"}
-
-    feature = str(state["feature_name"])
-    provider = provider_for_stage(PC_REVIEW_STAGE, state)
-    prompt = build_pc_candidate_extraction_prompt(state)
-    log_event(
-        state,
-        "pc_candidate_extraction_started",
-        "extracting project contract candidates",
-        stage=PC_REVIEW_STAGE,
-        provider=provider,
-    )
-    result = run_text_provider_prompt(
-        provider,
-        prompt,
-        logs_dir=run_dir(feature) / "logs",
-        log_prefix="pc_candidates",
-        timeout_seconds=3600,
-        performance=state.get("performance"),
-    )
-    if result.get("returncode") != 0 or result.get("timed_out"):
-        raise HarnessError(
-            "PC candidate extraction provider failed. "
-            f"stdout={result.get('stdout')} stderr={result.get('stderr')}"
-        )
-
-    parsed = parse_result_json_from_text(str(result.get("stdout_text") or ""))
-    raw_candidates = parsed.get("candidates") if isinstance(parsed, dict) else None
-    if raw_candidates is None:
-        raise HarnessError(
-            "PC candidate extraction did not return a JSON object with a candidates list. "
-            f"stdout={result.get('stdout')}"
-        )
-    if not isinstance(raw_candidates, list):
-        raise HarnessError("PC candidate extraction field 'candidates' must be a list.")
-
-    created_at = iso_now()
-    normalized = [
-        candidate
-        for candidate in (
-            normalize_pc_candidate(item, state, created_at, provider)
-            for item in raw_candidates
-            if isinstance(item, dict)
-        )
-        if candidate
-    ]
-    append_result = append_pc_candidates(normalized, state)
-    extraction = {
-        "status": "PASS",
-        "provider": provider,
-        "raw_candidate_count": len(raw_candidates),
-        "candidate_count": len(normalized),
-        "filtered_out_count": len(raw_candidates) - len(normalized),
-        "recorded_count": append_result["added_count"],
-        "candidate_ids": append_result["added_ids"],
-        "candidates_path": append_result["path"],
-        "stdout": result.get("stdout"),
-        "stderr": result.get("stderr"),
-        "meta": result.get("meta"),
-    }
-    state["pc_candidate_extraction"] = extraction
-    log_event(
-        state,
-        "pc_candidate_extraction_completed",
-        "project contract candidates extracted",
-        stage=PC_REVIEW_STAGE,
-        raw_candidate_count=len(raw_candidates),
-        candidate_count=len(normalized),
-        filtered_out_count=len(raw_candidates) - len(normalized),
-        recorded_count=append_result["added_count"],
-    )
-    return extraction
+    return history_core.extract_project_contract_candidates(globals(), state)
 
 
 def complete_run(state: dict[str, Any], stage: str) -> dict[str, Any]:
-    state["status"] = "complete"
-    state["current_stage"] = "done"
-    state.pop("blocked", None)
-    log_event(state, "complete", "run complete", stage=stage)
-    save_state(state)
-    try:
-        history_result = record_project_history(state)
-    except Exception as exc:
-        log_event(
-            state,
-            "history_failed",
-            f"project history update failed: {exc}",
-            stage=stage,
-        )
-    else:
-        log_event(
-            state,
-            "history_recorded",
-            "project history updated",
-            stage=stage,
-            status=history_result.get("status"),
-            event_id=history_result.get("event_id"),
-            index=history_result.get("index"),
-        )
-    save_state(state)
-    return state
+    return workflow_core._with_ctx(globals(), workflow_core._complete_run, state, stage)
 
 
 def finish_pc_candidate_extraction(state: dict[str, Any]) -> dict[str, Any]:
-    source_stage = str(state.get("pc_candidate_source_stage") or VERIFY_STAGE)
-    try:
-        extraction = extract_project_contract_candidates(state)
-    except Exception as exc:
-        state["status"] = "blocked"
-        state["current_stage"] = PC_REVIEW_STAGE
-        state["blocked"] = {
-            "stage": PC_REVIEW_STAGE,
-            "reason": f"PC candidate extraction failed: {exc}",
-            "next_stage": PC_REVIEW_STAGE,
-        }
-        write_handoff(
-            state,
-            str(state["blocked"]["reason"]),
-            stage=PC_REVIEW_STAGE,
-            next_action="PC 후보 추출 실패 원인을 확인한 뒤 resume으로 다시 시도하세요.",
-        )
-        log_event(
-            state,
-            "pc_candidate_extraction_failed",
-            str(exc),
-            stage=PC_REVIEW_STAGE,
-        )
-        save_state(state)
-        return state
-
-    state["pc_candidate_extraction"] = extraction
-    state.pop("blocked", None)
-    state.pop("pc_candidate_source_stage", None)
-    save_state(state)
-    return complete_run(state, source_stage)
+    return workflow_core._with_ctx(globals(), workflow_core._finish_pc_candidate_extraction, state)
 
 
 def log_event(
@@ -2885,89 +1137,19 @@ def log_event(
 
 
 def find_stage_result(text: str) -> dict[str, Any]:
-    lines = text.splitlines()
-    start = None
-    for i, line in enumerate(lines):
-        if line.strip() == "## 단계 결과":
-            start = i + 1
-    if start is None:
-        return {}
-
-    section_lines: list[str] = []
-    for line in lines[start:]:
-        if line.startswith("## "):
-            break
-        section_lines.append(line)
-    section = "\n".join(section_lines).strip()
-
-    json_result = parse_result_json_from_text(section)
-    if json_result:
-        return json_result
-
-    result: dict[str, Any] = {}
-    current_key: str | None = None
-    for line in section_lines:
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if stripped.startswith("- "):
-            item = stripped[2:]
-            if ":" in item:
-                key, value = item.split(":", 1)
-                key = key.strip()
-                value = value.strip()
-                if value == "":
-                    result[key] = []
-                    current_key = key
-                else:
-                    result[key] = parse_result_scalar(value)
-                    current_key = key
-            elif current_key and isinstance(result.get(current_key), list):
-                result[current_key].append(item.strip())
-        elif stripped.startswith("-") and current_key and isinstance(result.get(current_key), list):
-            result[current_key].append(stripped[1:].strip())
-        elif line.startswith("  - ") and current_key and isinstance(result.get(current_key), list):
-            result[current_key].append(line[4:].strip())
-    return result
+    return stage_runtime_core.find_stage_result(globals(), text)
 
 
 def parse_result_json_from_text(text: str) -> dict[str, Any]:
-    fence = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.S | re.I)
-    if fence:
-        text = fence.group(1).strip()
-    else:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            return {}
-        text = text[start : end + 1]
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+    return stage_runtime_core.parse_result_json_from_text(globals(), text)
 
 
 def read_stage_result_json(path: Path) -> dict[str, Any]:
-    try:
-        parsed = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise HarnessError(f"Invalid stage result JSON in {rel(path)}: {exc}") from exc
-    if not isinstance(parsed, dict):
-        raise HarnessError(f"Stage result JSON must be an object: {rel(path)}")
-    return parsed
+    return stage_runtime_core.read_stage_result_json(globals(), path)
 
 
 def parse_result_scalar(value: str) -> Any:
-    value = value.strip()
-    low = value.lower()
-    if low == "true":
-        return True
-    if low == "false":
-        return False
-    if low == "없음":
-        return ""
-    return value
+    return stage_runtime_core.parse_result_scalar(globals(), value)
 
 
 def extract_feature_name(spec_text: str) -> str | None:
@@ -2978,150 +1160,39 @@ def extract_feature_name(spec_text: str) -> str | None:
 
 
 def maybe_rename_feature(state: dict[str, Any]) -> dict[str, Any]:
-    old = state["feature_name"]
-    if state.get("feature_name_locked"):
-        return state
-    spec_path = stage_output_path(old, START_STAGE)
-    if not spec_path.exists():
-        return state
-    feature_name = extract_feature_name(spec_path.read_text(encoding="utf-8"))
-    if not feature_name:
-        result_json = stage_result_json_path(old, START_STAGE)
-        if result_json.exists():
-            try:
-                json_feature = read_stage_result_json(result_json).get("feature_name")
-            except HarnessError:
-                json_feature = None
-            if isinstance(json_feature, str):
-                feature_name = json_feature
-    if not feature_name or feature_name == old:
-        return state
-    if not validate_slug(feature_name):
-        state["status"] = "blocked"
-        state["blocked"] = {
-            "reason": f"Invalid feature_name in 00_spec.md: {feature_name}",
-            "stage": START_STAGE,
-        }
-        save_state(state)
-        return state
-
-    old_feature_dir = feature_dir(old)
-    new_feature_dir = feature_dir(feature_name)
-    old_run_dir = run_dir(old)
-    new_run_dir = run_dir(feature_name)
-    if new_feature_dir.exists() or new_run_dir.exists():
-        state["status"] = "blocked"
-        state["blocked"] = {
-            "reason": f"Cannot rename feature to existing run or feature: {feature_name}",
-            "stage": START_STAGE,
-        }
-        save_state(state)
-        return state
-
-    if old_feature_dir.exists():
-        shutil.move(str(old_feature_dir), str(new_feature_dir))
-    state["feature_name"] = feature_name
-    state.setdefault("events", []).append(
-        {"at": iso_now(), "event": "feature_renamed", "from": old, "to": feature_name}
-    )
-    if old_run_dir.exists():
-        shutil.move(str(old_run_dir), str(new_run_dir))
-    save_state(state)
-    return state
+    return workflow_core._with_ctx(globals(), workflow_core._maybe_rename_feature, state)
 
 
 def stage_default_next(stage: str) -> str | None:
-    meta, _, _ = read_preset(stage)
-    if stage == VERIFY_STAGE:
-        return str(meta.get("default_next_stage_on_pass", DOCUMENT_STAGE or "done"))
-    if DOCUMENT_STAGE and stage == DOCUMENT_STAGE:
-        return "done"
-    return meta.get("default_next_stage")  # type: ignore[return-value]
-
-
-def boolish(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() == "true"
-    return False
+    return stage_runtime_core.stage_default_next(globals(), stage)
 
 
 def expand_policy_item(item: Any, feature: str) -> str:
-    return norm_repo_path(str(item).replace("[기능명]", feature))
+    return policy_core.expand_policy_item(item, feature)
 
 
 def is_test_path(path: str) -> bool:
-    path = norm_repo_path(path)
-    return path == "tests" or path.startswith("tests/")
+    return policy_core.is_test_path(path)
 
 
 def is_production_code_path(path: str) -> bool:
-    path = norm_repo_path(path)
-    return path.startswith("src/") and not is_test_path(path)
+    return policy_core.is_production_code_path(path)
 
 
 def direct_policy_match(path: str, policy_path: str) -> bool:
-    policy_path = norm_repo_path(policy_path).rstrip("/")
-    if not policy_path or policy_path.lower() == "none":
-        return False
-    return path == policy_path or path.startswith(policy_path + "/")
+    return policy_core.direct_policy_match(path, policy_path)
 
 
 def policy_item_matches(path: str, item: str, before_snapshot: dict[str, str]) -> bool:
-    path = norm_repo_path(path)
-    item = norm_repo_path(item)
-    existed_before = path in before_snapshot
-
-    if item == "production_code":
-        return is_production_code_path(path)
-    if item == "tests":
-        return is_test_path(path)
-    if item == "new_tests":
-        return is_test_path(path) and not existed_before
-    if item == "existing_tests":
-        return is_test_path(path) and existed_before
-    return direct_policy_match(path, item)
+    return policy_core.policy_item_matches(path, item, before_snapshot)
 
 
 def write_policy_violations(state: dict[str, Any], stage: str) -> list[str]:
-    feature = state["feature_name"]
-    meta, _, _ = read_preset(stage)
-    snapshots = state.get("stage_file_snapshots", {})
-    before_snapshot = snapshots.get(stage)
-    if not isinstance(before_snapshot, dict):
-        changed_paths = filtered_changed_paths(state, stage)
-        before_snapshot = {}
-    else:
-        changed_paths = changed_since_snapshot(before_snapshot, feature)
-
-    allowed = [expand_policy_item(item, feature) for item in meta.get("allowed_writes", [])]
-    if stage in STAGES:
-        allowed.append(rel(stage_output_path(feature, stage)))
-        allowed.append(rel(stage_result_json_path(feature, stage)))
-    forbidden = [expand_policy_item(item, feature) for item in meta.get("forbidden_writes", [])]
-    violations: list[str] = []
-
-    for path in changed_paths:
-        if is_harness_internal_path(path, feature):
-            continue
-        forbidden_match = next(
-            (item for item in forbidden if policy_item_matches(path, item, before_snapshot)),
-            None,
-        )
-        if forbidden_match:
-            violations.append(f"{path} matches forbidden_writes entry {forbidden_match!r}")
-            continue
-
-        allowed_match = any(policy_item_matches(path, item, before_snapshot) for item in allowed)
-        if not allowed_match:
-            violations.append(f"{path} is outside allowed_writes")
-
-    return violations
+    return policy_core.write_policy_violations(globals(), state, stage)
 
 
 def stage_status(result: dict[str, Any]) -> str:
-    return str(result.get("status", "")).strip().upper()
+    return stage_runtime_core.stage_status(globals(), result)
 
 
 def run_status_line(state: dict[str, Any]) -> str:
@@ -3221,134 +1292,11 @@ def print_detailed_status(state: dict[str, Any]) -> None:
 
 
 def prompt_path(state: dict[str, Any], stage: str) -> Path:
-    attempts = state.setdefault("attempts", {})
-    attempt = int(attempts.get(stage, 0)) + 1
-    attempts[stage] = attempt
-    prompt_dir = run_dir(state["feature_name"]) / "prompts"
-    prompt_dir.mkdir(parents=True, exist_ok=True)
-    return prompt_dir / f"{stage}_attempt{attempt}.md"
+    return stage_runtime_core.prompt_path(globals(), state, stage)
 
 
 def generate_prompt(state: dict[str, Any], stage: str, retry_context: str | None = None) -> Path:
-    feature = state["feature_name"]
-    meta, body, raw = read_preset(stage)
-    scheduled_provider = provider_for_stage(stage, state)
-    preset_text = raw.replace("[기능명]", feature)
-    output = stage_output_path(feature, stage)
-    result_json = stage_result_json_path(feature, stage)
-    ensure_project_contract_file()
-    state.setdefault("stage_file_snapshots", {})[stage] = file_policy_snapshot(feature)
-    defaults_mode = bool(state.get("defaults_mode"))
-    decision_policy = (
-        "Use recommended defaults for ambiguous decisions. Do not return NEEDS_USER unless the task is impossible, unsafe, "
-        "requires credentials/secrets that are not available, or would perform destructive/non-reversible actions. "
-        "Record all default decisions and their rationale in the stage output."
-        if defaults_mode
-        else
-        "Ask for user input when the preset's question criteria require it. Return NEEDS_USER for unresolved decisions."
-    )
-
-    previous_outputs: list[str] = []
-    for prev in STAGES:
-        if prev == stage:
-            break
-        prev_path = stage_output_path(feature, prev)
-        if prev_path.exists():
-            previous_outputs.append(f"- {rel(prev_path)}")
-        prev_result_json = stage_result_json_path(feature, prev)
-        if prev_result_json.exists():
-            previous_outputs.append(f"- {rel(prev_result_json)}")
-
-    additional_inputs: list[str] = []
-    if stage == VERIFY_RETRY_TARGET_STAGE:
-        verify_path = stage_output_path(feature, VERIFY_STAGE)
-        if verify_path.exists():
-            additional_inputs.append(f"- {rel(verify_path)}")
-        verify_result_json = stage_result_json_path(feature, VERIFY_STAGE)
-        if verify_result_json.exists():
-            additional_inputs.append(f"- {rel(verify_result_json)}")
-        latest_verify_path = latest_verification_result_path(feature)
-        if latest_verify_path.exists():
-            additional_inputs.append(f"- {rel(latest_verify_path)}")
-
-    project_contract = project_contract_prompt_text()
-
-    instruction = f"""# Local Harness Prompt
-
-## Harness Context
-- feature_name: {feature}
-- pipeline_mode: {PIPELINE_MODE}
-- stage: {stage}
-- preferred_model: {meta.get("preferred_model", "")}
-- scheduled_provider: {scheduled_provider}
-- performance: {normalize_performance(state.get("performance"))}
-- output_file: {rel(output)}
-- result_json_file: {rel(result_json)}
-- run_state: {rel(state_path(feature))}
-- generated_at: {iso_now()}
-- defaults_mode: {str(defaults_mode).lower()}
-- feature_name_locked: {str(bool(state.get("feature_name_locked"))).lower()}
-
-## Decision Policy
-{decision_policy}
-
-## Manual Provider Instructions
-1. The local harness is executing this prompt with the preferred model when possible.
-2. Make the requested file changes directly in the repository.
-3. Write the human-readable stage output file exactly at `{rel(output)}`.
-4. Also write the machine-readable stage result JSON exactly at `{rel(result_json)}`.
-5. Do not run `git commit`, `git reset`, `git checkout`, `git rebase`, or `git push`. The local harness owns Git history.
-6. This Git ownership rule overrides any preset text that appears to ask the model to create, amend, or push commits.
-7. For commit stages, leave the working tree commit-ready and record commit intent in the stage output; the harness will create or amend the commit.
-8. If `defaults_mode: true`, prefer recommended defaults over `NEEDS_USER` unless blocked by missing credentials, safety, destructive operations, or impossibility.
-9. If the stage needs user input under the decision policy, write both outputs with `status: NEEDS_USER`.
-10. If the stage fails, write both outputs with `status: FAIL` and a concrete blocking reason.
-11. If `feature_name_locked: true`, keep the existing `feature_name` exactly as provided by the harness. Do not rename or invent a different feature slug.
-12. End with a concise summary; the harness will inspect files, not your final message.
-
-## Machine Result JSON Contract
-The harness reads `{rel(result_json)}` first. Keep the `## 단계 결과` section in `{rel(output)}` for humans, but write this JSON file for the harness.
-
-Required JSON keys:
-- status: "PASS", "FAIL", "SKIPPED", or "NEEDS_USER"
-- next_stage: next stage id or "done"
-- human_gate_required: true or false
-- blocking_reason: string, use "" when there is no blocker
-
-Include any extra stage fields that the preset asks for, such as `risk_level`, `harness_commit_required`, `changed_files`, `verification_summary`, or `fix_inputs`.
-For PASS or FAIL stages, also include `history_notes` with these arrays when known: `implemented`, `risks`, `future_improvements`, `decisions`, and `unresolved_items`. Use empty arrays for categories with nothing to record. Prefer Korean text for human-facing titles, descriptions, reasons, risks, and decisions when the project context is Korean.
-
-{project_contract}
-
-## Original User Request
-{state.get("request", "")}
-
-## Previous Stage Outputs
-{chr(10).join(previous_outputs) if previous_outputs else "- none"}
-
-## Additional Stage Inputs
-{chr(10).join(additional_inputs) if additional_inputs else "- none"}
-
-## Retry Context
-{retry_context if retry_context else "- none"}
-
-## Current Git Hints
-- current_head: {safe_git_head()}
-- changed_paths_excluding_runs: {json.dumps(filtered_changed_paths(state, stage), ensure_ascii=False)}
-- latest_harness_verification: {rel(latest_verification_result_path(feature)) if latest_verification_result_path(feature).exists() else "none"}
-
----
-
-"""
-    full_prompt = instruction + preset_text
-    path = prompt_path(state, stage)
-    path.write_text(full_prompt, encoding="utf-8")
-    state["current_stage"] = stage
-    state["current_prompt"] = rel(path)
-    state["status"] = "waiting_for_model"
-    log_event(state, "prompt_generated", "generated prompt", stage=stage, path=rel(path))
-    save_state(state)
-    return path
+    return stage_runtime_core.generate_prompt(globals(), state, stage, retry_context)
 
 
 def print_provider_heartbeat(
@@ -3361,52 +1309,19 @@ def print_provider_heartbeat(
     last_stdout_size: int,
     last_stderr_size: int,
 ) -> tuple[int, int]:
-    stdout_size = file_size(stdout_path)
-    stderr_size = file_size(stderr_path)
-    stdout_delta = stdout_size - last_stdout_size
-    stderr_delta = stderr_size - last_stderr_size
-    parts = [
-        color_text(f"[{datetime.now().strftime('%H:%M:%S')}]", "dim"),
-        color_text("[진행중]", "cyan", "bold"),
-        f"{color_text(provider, 'magenta', 'bold')} 실행 중",
-        f"stage={stage}",
-        f"elapsed={format_duration(time.time() - started)}",
-        f"stdout +{format_bytes(max(0, stdout_delta))}",
-        f"stderr +{format_bytes(max(0, stderr_delta))}",
-    ]
-    print(" | ".join(parts), flush=True)
-    return stdout_size, stderr_size
+    return stage_runtime_core.print_provider_heartbeat(globals(), stage=stage, provider=provider, started=started, stdout_path=stdout_path, stderr_path=stderr_path, last_stdout_size=last_stdout_size, last_stderr_size=last_stderr_size)
 
 
 def harness_script_for_pipeline_mode(pipeline_mode: Any) -> str:
-    mode = str(pipeline_mode or PIPELINE_MODE)
-    if mode == "fast":
-        return ".ai\\harness_fast.py"
-    if mode == "standard":
-        return ".ai\\harness_standard.py"
-    return ".ai\\harness.py"
+    return stage_runtime_core.harness_script_for_pipeline_mode(globals(), pipeline_mode)
 
 
 def suggested_retry_command(state: dict[str, Any], *, auto: bool = True) -> str:
-    script = harness_script_for_pipeline_mode(state.get("pipeline_mode"))
-    feature = str(state.get("feature_name") or "<feature>")
-    parts = ["python", script, "retry", feature]
-    if auto:
-        parts.extend(["--auto", "--yes"])
-    if state.get("defaults_mode"):
-        parts.append("--defaults")
-    performance = normalize_performance(state.get("performance"))
-    if performance != DEFAULT_PERFORMANCE:
-        parts.extend(["--performance", performance])
-    return " ".join(parts)
+    return stage_runtime_core.suggested_retry_command(globals(), state, auto=auto)
 
 
 def provider_log_hint(stdout_path: Path, stderr_path: Path, provider_log_path: Path) -> str:
-    return (
-        f"stdout={rel(stdout_path)} "
-        f"stderr={rel(stderr_path)} "
-        f"provider_log={rel(provider_log_path)}"
-    )
+    return stage_runtime_core.provider_log_hint(globals(), stdout_path, stderr_path, provider_log_path)
 
 
 def provider_failure_reason(
@@ -3419,469 +1334,19 @@ def provider_failure_reason(
     stderr_path: Path,
     provider_log_path: Path,
 ) -> str:
-    retry_command = suggested_retry_command(state)
-    return (
-        f"Provider {provider} {failure} while running stage {stage}. "
-        f"Inspect logs: {provider_log_hint(stdout_path, stderr_path, provider_log_path)}. "
-        f"Retry current stage: {retry_command}"
-    )
+    return stage_runtime_core.provider_failure_reason(globals(), state, stage=stage, provider=provider, failure=failure, stdout_path=stdout_path, stderr_path=stderr_path, provider_log_path=provider_log_path)
 
 
 def execute_current_prompt(state: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
-    feature = state["feature_name"]
-    stage = state["current_stage"]
-    prompt_rel = state.get("current_prompt")
-    if not prompt_rel:
-        raise HarnessError("No current prompt to execute.")
-    prompt_file = ROOT / prompt_rel
-    if not prompt_file.exists():
-        raise HarnessError(f"Prompt file does not exist: {prompt_file}")
-
-    provider = provider_for_stage(stage, state)
-    prompt_text = prompt_file.read_text(encoding="utf-8")
-    logs_dir = run_dir(feature) / "logs"
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    attempt = state.get("attempts", {}).get(stage, 1)
-    stdout_path = logs_dir / f"{stage}_attempt{attempt}_{provider}.out.txt"
-    stderr_path = logs_dir / f"{stage}_attempt{attempt}_{provider}.err.txt"
-    meta_path = logs_dir / f"{stage}_attempt{attempt}_{provider}.json"
-    cli_log_path = logs_dir / f"{stage}_attempt{attempt}_{provider}.cli.log"
-    performance = normalize_performance(state.get("performance"))
-
-    command, prompt_in_command = prepare_provider_command(
-        provider,
-        prompt_text,
-        prompt_file=prompt_file.resolve(),
-        log_file=cli_log_path.resolve(),
-        performance=performance,
-    )
-    executable = resolve_executable(command)
-    if not executable:
-        raise HarnessError(f"Provider executable not found for {provider}: {command[0]}")
-
-    before_head = safe_git_head()
-    state["status"] = "model_running"
-    log_event(
-        state,
-        "provider_started",
-        f"running {provider}",
-        stage=stage,
-        provider=provider,
-        performance=performance,
-        timeout_seconds=timeout_seconds,
-    )
-    save_state(state)
-
-    started = time.time()
-    stdout_path.write_text("", encoding="utf-8")
-    stderr_path.write_text("", encoding="utf-8")
-    with stdout_path.open("w", encoding="utf-8", errors="replace") as stdout_fh, stderr_path.open(
-        "w", encoding="utf-8", errors="replace"
-    ) as stderr_fh:
-        proc = subprocess.Popen(
-            command,
-            cwd=ROOT,
-            stdin=subprocess.PIPE,
-            stdout=stdout_fh,
-            stderr=stderr_fh,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        if proc.stdin and not prompt_in_command:
-            proc.stdin.write(prompt_text)
-            proc.stdin.close()
-        elif proc.stdin:
-            proc.stdin.close()
-
-        last_heartbeat = started
-        last_stdout_size = 0
-        last_stderr_size = 0
-        while proc.poll() is None:
-            now = time.time()
-            if timeout_seconds > 0 and now - started > timeout_seconds:
-                proc.kill()
-                proc.wait()
-                elapsed = round(time.time() - started, 2)
-                reason = provider_failure_reason(
-                    state,
-                    stage=stage,
-                    provider=provider,
-                    failure=f"timed out after {timeout_seconds} seconds",
-                    stdout_path=stdout_path,
-                    stderr_path=stderr_path,
-                    provider_log_path=cli_log_path,
-                )
-                state["status"] = "blocked"
-                state["blocked"] = {
-                    "stage": stage,
-                    "reason": reason,
-                    "stdout": rel(stdout_path),
-                    "stderr": rel(stderr_path),
-                    "provider_log": rel(cli_log_path),
-                    "retry_command": suggested_retry_command(state),
-                }
-                write_handoff(
-                    state,
-                    reason,
-                    stage=stage,
-                    next_action=f"로그를 확인한 뒤 현재 단계를 다시 실행하세요: {suggested_retry_command(state)}",
-                )
-                log_event(
-                    state,
-                    "provider_failed",
-                    f"{provider} timed out",
-                    stage=stage,
-                    provider=provider,
-                    stdout=rel(stdout_path),
-                    stderr=rel(stderr_path),
-                    provider_log=rel(cli_log_path),
-                    retry_command=suggested_retry_command(state),
-                    elapsed_seconds=elapsed,
-                )
-                save_state(state)
-                return state
-            if now - last_heartbeat >= DEFAULT_PROVIDER_HEARTBEAT_SECONDS:
-                last_stdout_size, last_stderr_size = print_provider_heartbeat(
-                    stage=stage,
-                    provider=provider,
-                    started=started,
-                    stdout_path=stdout_path,
-                    stderr_path=stderr_path,
-                    last_stdout_size=last_stdout_size,
-                    last_stderr_size=last_stderr_size,
-                )
-                last_heartbeat = now
-            time.sleep(1)
-
-    elapsed = round(time.time() - started, 2)
-    after_head = safe_git_head()
-    meta_path.write_text(
-        json.dumps(
-            {
-                "stage": stage,
-                "provider": provider,
-                "performance": performance,
-                "performance_settings": provider_performance_settings(provider, performance),
-                "command": redact_prompt_command(command, prompt_text),
-                "returncode": proc.returncode,
-                "before_head": before_head,
-                "after_head": after_head,
-                "stdout": rel(stdout_path),
-                "stderr": rel(stderr_path),
-                "provider_log": rel(cli_log_path),
-                "finished_at": iso_now(),
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    if before_head and after_head and before_head != after_head:
-        state["status"] = "blocked"
-        state["blocked"] = {
-            "stage": stage,
-            "reason": "Provider changed Git HEAD. The harness owns commits; inspect history before continuing.",
-        }
-        write_handoff(
-            state,
-            str(state["blocked"]["reason"]),
-            stage=stage,
-            next_action="Git history를 점검한 뒤 수동으로 정리하고 resume 또는 retry 하세요.",
-        )
-        log_event(
-            state,
-            "blocked_provider_changed_head",
-            "provider changed Git HEAD",
-            stage=stage,
-            before_head=before_head,
-            after_head=after_head,
-        )
-        save_state(state)
-        return state
-
-    if proc.returncode != 0:
-        reason = provider_failure_reason(
-            state,
-            stage=stage,
-            provider=provider,
-            failure=f"exited with code {proc.returncode}",
-            stdout_path=stdout_path,
-            stderr_path=stderr_path,
-            provider_log_path=cli_log_path,
-        )
-        state["status"] = "blocked"
-        state["blocked"] = {
-            "stage": stage,
-            "reason": reason,
-            "stdout": rel(stdout_path),
-            "stderr": rel(stderr_path),
-            "provider_log": rel(cli_log_path),
-            "retry_command": suggested_retry_command(state),
-        }
-        write_handoff(
-            state,
-            reason,
-            stage=stage,
-            next_action=f"로그를 확인한 뒤 현재 단계를 다시 실행하세요: {suggested_retry_command(state)}",
-        )
-        log_event(
-            state,
-            "provider_failed",
-            f"{provider} exited with {proc.returncode}",
-            stage=stage,
-            provider=provider,
-            returncode=proc.returncode,
-            stdout=rel(stdout_path),
-            stderr=rel(stderr_path),
-            provider_log=rel(cli_log_path),
-            retry_command=suggested_retry_command(state),
-            elapsed_seconds=elapsed,
-        )
-        save_state(state)
-        return state
-
-    expected_output = stage_output_path(feature, stage)
-    expected_result_json = stage_result_json_path(feature, stage)
-    if (
-        not expected_output.exists()
-        and not expected_result_json.exists()
-        and file_size(stdout_path) == 0
-        and file_size(stderr_path) == 0
-    ):
-        reason = provider_failure_reason(
-            state,
-            stage=stage,
-            provider=provider,
-            failure="exited with code 0 but produced no stdout, no stderr, and no required outputs",
-            stdout_path=stdout_path,
-            stderr_path=stderr_path,
-            provider_log_path=cli_log_path,
-        )
-        state["status"] = "blocked"
-        state["blocked"] = {
-            "stage": stage,
-            "reason": reason,
-            "next_stage": stage,
-            "stdout": rel(stdout_path),
-            "stderr": rel(stderr_path),
-            "provider_log": rel(cli_log_path),
-            "retry_command": suggested_retry_command(state),
-        }
-        write_handoff(
-            state,
-            reason,
-            stage=stage,
-            next_action=f"provider 설정 또는 인증 상태를 고친 뒤 현재 단계를 다시 실행하세요: {suggested_retry_command(state)}",
-        )
-        log_event(
-            state,
-            "provider_no_output",
-            f"{provider} exited without output",
-            stage=stage,
-            provider=provider,
-            stdout=rel(stdout_path),
-            stderr=rel(stderr_path),
-            provider_log=rel(cli_log_path),
-            retry_command=suggested_retry_command(state),
-            elapsed_seconds=elapsed,
-        )
-        save_state(state)
-        return state
-
-    state["status"] = "model_completed"
-    log_event(
-        state,
-        "provider_completed",
-        f"{provider} completed",
-        stage=stage,
-        provider=provider,
-        stdout=rel(stdout_path),
-        stderr=rel(stderr_path),
-        elapsed_seconds=elapsed,
-    )
-    save_state(state)
-    return state
+    return stage_runtime_core.execute_current_prompt(globals(), state, timeout_seconds)
 
 
 def display_cwd(path: Path) -> str:
-    try:
-        resolved = path.resolve()
-        root = ROOT.resolve()
-        if resolved == root or root in resolved.parents:
-            return rel(resolved)
-    except Exception:
-        pass
-    return str(path)
+    return verification_core.display_cwd(globals(), path)
 
 
 def run_harness_verification(state: dict[str, Any]) -> dict[str, Any]:
-    feature = state["feature_name"]
-    stage = state.get("current_stage", VERIFY_STAGE)
-    attempt = int(state.get("attempts", {}).get(VERIFY_STAGE, 1))
-    commands, required = configured_verification_commands(feature)
-    out_dir = verification_dir(feature)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    started_at = iso_now()
-    result_path = out_dir / f"{VERIFY_STAGE}_attempt{attempt}_{now_stamp()}.json"
-    latest_path = latest_verification_result_path(feature)
-
-    summary: dict[str, Any] = {
-        "feature_name": feature,
-        "stage": stage,
-        "attempt": attempt,
-        "result_path": rel(result_path),
-        "latest_path": rel(latest_path),
-        "started_at": started_at,
-        "finished_at": None,
-        "required": required,
-        "passed": True,
-        "status": "PASS",
-        "commands": [],
-        "failed_commands": [],
-    }
-
-    if not commands:
-        summary["passed"] = not required
-        summary["status"] = "FAIL" if required else "SKIPPED"
-        summary["failure_reason"] = (
-            "No harness verification commands configured."
-            if required
-            else "Harness verification is not configured."
-        )
-        summary["finished_at"] = iso_now()
-        result_path.write_text(
-            json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        shutil.copyfile(result_path, latest_path)
-        state["last_harness_verification"] = rel(latest_path)
-        log_event(
-            state,
-            "harness_verification_skipped" if not required else "harness_verification_failed",
-            str(summary["failure_reason"]),
-            stage=VERIFY_STAGE,
-            result=rel(latest_path),
-        )
-        save_state(state)
-        return summary | {"path": rel(latest_path)}
-
-    log_event(
-        state,
-        "harness_verification_started",
-        "running configured verification commands",
-        stage=VERIFY_STAGE,
-        count=len(commands),
-    )
-
-    for command_spec in commands:
-        name = command_spec["name"]
-        command = command_spec["command"]
-        cwd = Path(command_spec["cwd"])
-        timeout_seconds = int(command_spec["timeout_seconds"])
-        stdout_path = out_dir / f"{VERIFY_STAGE}_attempt{attempt}_{name}.out.txt"
-        stderr_path = out_dir / f"{VERIFY_STAGE}_attempt{attempt}_{name}.err.txt"
-        entry: dict[str, Any] = {
-            "name": name,
-            "command": command,
-            "cwd": display_cwd(cwd),
-            "timeout_seconds": timeout_seconds,
-            "returncode": None,
-            "elapsed_seconds": None,
-            "passed": False,
-            "timed_out": False,
-            "stdout": rel(stdout_path),
-            "stderr": rel(stderr_path),
-        }
-
-        executable = resolve_executable(command)
-        if not executable:
-            entry["error"] = f"Executable not found: {command[0]}"
-            stdout_path.write_text("", encoding="utf-8")
-            stderr_path.write_text(entry["error"] + "\n", encoding="utf-8")
-            summary["commands"].append(entry)
-            summary["failed_commands"].append(name)
-            log_event(
-                state,
-                "harness_verification_command_failed",
-                entry["error"],
-                stage=VERIFY_STAGE,
-                command=name,
-            )
-            continue
-
-        started = time.time()
-        try:
-            proc = subprocess.run(
-                command,
-                cwd=cwd,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=timeout_seconds,
-                check=False,
-            )
-            elapsed = round(time.time() - started, 2)
-            stdout_path.write_text(proc.stdout or "", encoding="utf-8")
-            stderr_path.write_text(proc.stderr or "", encoding="utf-8")
-            entry["returncode"] = proc.returncode
-            entry["elapsed_seconds"] = elapsed
-            entry["passed"] = proc.returncode == 0
-        except subprocess.TimeoutExpired as exc:
-            elapsed = round(time.time() - started, 2)
-            stdout = exc.stdout or ""
-            stderr = exc.stderr or ""
-            if isinstance(stdout, bytes):
-                stdout = stdout.decode("utf-8", errors="replace")
-            if isinstance(stderr, bytes):
-                stderr = stderr.decode("utf-8", errors="replace")
-            stdout_path.write_text(str(stdout), encoding="utf-8")
-            stderr_path.write_text(
-                str(stderr) + f"\nTimed out after {timeout_seconds} seconds.\n",
-                encoding="utf-8",
-            )
-            entry["elapsed_seconds"] = elapsed
-            entry["timed_out"] = True
-            entry["error"] = f"Timed out after {timeout_seconds} seconds."
-
-        summary["commands"].append(entry)
-        if not entry["passed"]:
-            summary["failed_commands"].append(name)
-            log_event(
-                state,
-                "harness_verification_command_failed",
-                "verification command failed",
-                stage=VERIFY_STAGE,
-                command=name,
-                returncode=entry.get("returncode"),
-                timed_out=entry.get("timed_out"),
-                stderr=entry.get("stderr"),
-            )
-
-    summary["passed"] = not summary["failed_commands"]
-    summary["status"] = "PASS" if summary["passed"] else "FAIL"
-    summary["finished_at"] = iso_now()
-    result_path.write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    shutil.copyfile(result_path, latest_path)
-    state["last_harness_verification"] = rel(latest_path)
-    log_event(
-        state,
-        "harness_verification_completed",
-        "harness verification completed",
-        stage=VERIFY_STAGE,
-        status=summary["status"],
-        result=rel(latest_path),
-        failed=",".join(summary["failed_commands"]),
-    )
-    save_state(state)
-    return summary | {"path": rel(latest_path)}
+    return verification_core.run_harness_verification(globals(), state)
 
 
 def enforce_harness_verify_result(
@@ -3890,23 +1355,13 @@ def enforce_harness_verify_result(
     status: str,
     next_stage: str,
 ) -> tuple[str, str]:
-    if state.get("current_stage") != VERIFY_STAGE or status != "PASS":
-        return status, next_stage
-
-    verification = run_harness_verification(state)
-    result["harness_verification_status"] = verification["status"]
-    result["harness_verification_path"] = verification["path"]
-    if verification["passed"]:
-        return status, next_stage
-
-    result["status"] = "FAIL"
-    result["next_stage"] = VERIFY_RETRY_TARGET_STAGE
-    result["harness_commit_required"] = False
-    result["blocking_reason"] = (
-        "Harness verification failed. See "
-        f"{verification['path']} for command results."
+    return verification_core.enforce_harness_verify_result(
+        globals(),
+        state,
+        result,
+        status,
+        next_stage,
     )
-    return "FAIL", VERIFY_RETRY_TARGET_STAGE
 
 
 def auto_drive(
@@ -3916,129 +1371,19 @@ def auto_drive(
     max_steps: int,
     max_verify_fix_retries: int = DEFAULT_MAX_VERIFY_FIX_RETRIES,
 ) -> dict[str, Any]:
-    steps = 0
-    log_event(
-        state,
-        "auto_started",
-        "automatic execution started",
-        yes=yes,
-        timeout_seconds=timeout_seconds,
-        max_steps=max_steps,
-        max_verify_fix_retries=max_verify_fix_retries,
-    )
-    while steps < max_steps:
-        steps += 1
-        status = state.get("status")
-        log_event(state, "auto_step", "evaluating run state", step=steps, status=status)
-        if status == "complete":
-            log_event(state, "auto_complete", "automatic execution complete")
-            return state
-        if status == "blocked":
-            blocked = state.get("blocked", {})
-            reason = str(blocked.get("reason", ""))
-            if yes and "Human gate approval required" in reason:
-                log_event(state, "auto_approving_gate", "auto-approving human gate", reason=reason)
-                state = approve_run(
-                    state["feature_name"],
-                    max_verify_fix_retries=max_verify_fix_retries,
-                )
-                continue
-            log_event(state, "auto_blocked", "automatic execution blocked", reason=reason)
-            return state
-        if status in {"created"}:
-            generate_prompt(state, state["current_stage"])
-            continue
-        if status in {"waiting_for_model", "model_completed"}:
-            if status == "waiting_for_model":
-                state = execute_current_prompt(state, timeout_seconds)
-                if state.get("status") == "blocked":
-                    return state
-            state = resume_run(state["feature_name"], max_verify_fix_retries=max_verify_fix_retries)
-            continue
-        raise HarnessError(f"Cannot auto-drive run in status={status!r}")
-    raise HarnessError(f"Reached max auto steps ({max_steps}) without completion.")
+    return workflow_core._with_ctx(globals(), workflow_core._auto_drive, state, yes, timeout_seconds, max_steps, max_verify_fix_retries)
 
 
 def safe_git_head() -> str:
-    try:
-        return git_head()
-    except Exception:
-        return ""
+    return workflow_core._with_ctx(globals(), workflow_core._safe_git_head)
 
 
 def filtered_changed_paths(state: dict[str, Any], stage: str) -> list[str]:
-    baseline = set(state.get("baseline_dirty", []))
-    feature = state["feature_name"]
-    paths = []
-    for path in git_changed_paths():
-        if path in baseline:
-            continue
-        if path.startswith(".ai/runs/"):
-            continue
-        if DOCUMENT_STAGE and stage == DOCUMENT_STAGE:
-            continue
-        if stage == VERIFY_RETRY_TARGET_STAGE and path == f".ai/features/{feature}/{STAGE_OUTPUTS[VERIFY_STAGE]}":
-            continue
-        if path.startswith(".ai/docs/"):
-            continue
-        paths.append(path)
-    return sorted(set(paths))
+    return workflow_core._with_ctx(globals(), workflow_core._filtered_changed_paths, state, stage)
 
 
 def commit_for_stage(state: dict[str, Any], stage: str, result: dict[str, Any]) -> None:
-    if stage in NO_COMMIT_STAGES:
-        log_event(state, "commit_skipped", "stage does not commit", stage=stage)
-        return
-
-    status = stage_status(result)
-    if stage == VERIFY_STAGE and status != "PASS":
-        log_event(
-            state,
-            "commit_skipped_failed_verify",
-            f"{VERIFY_STAGE} failed; leaving changes uncommitted for {VERIFY_RETRY_TARGET_STAGE}",
-            stage=stage,
-        )
-        return
-
-    paths = filtered_changed_paths(state, stage)
-    if not paths:
-        raise HarnessError(f"No changed files to commit for {stage}.")
-
-    feature = state["feature_name"]
-    commits = state.setdefault("commits", {})
-    message = f"[{feature}][{now_stamp()}][{stage}]"
-
-    amend = False
-    if stage == VERIFY_RETRY_TARGET_STAGE and commits.get(VERIFY_RETRY_TARGET_STAGE):
-        head = git_head()
-        if head != commits[VERIFY_RETRY_TARGET_STAGE]:
-            raise HarnessError(
-                f"Cannot amend {VERIFY_RETRY_TARGET_STAGE}: current HEAD is not the recorded "
-                f"{VERIFY_RETRY_TARGET_STAGE} commit. "
-                "Stop and inspect git history."
-            )
-        amend = True
-
-    log_event(
-        state,
-        "commit_start",
-        "creating stage commit" if not amend else "amending stage commit",
-        stage=stage,
-        amend=amend,
-        paths=",".join(paths),
-    )
-    git_add(paths)
-    sha = git_commit(message, amend=amend)
-    commits[stage] = sha
-    log_event(
-        state,
-        "commit_amended" if amend else "commit_created",
-        "stage commit recorded",
-        stage=stage,
-        sha=sha,
-        paths=",".join(paths),
-    )
-    save_state(state)
+    return workflow_core._with_ctx(globals(), workflow_core._commit_for_stage, state, stage, result)
 
 
 def create_run(
@@ -4047,74 +1392,11 @@ def create_run(
     defaults_mode: bool = False,
     performance: Any | None = None,
 ) -> dict[str, Any]:
-    warn_pending_pc_candidates_for_new_run()
-    assert_no_unpushed_commits_for_new_run()
-    assert_no_incomplete_runs_for_new_run()
-    ensure_dirs()
-    performance_name = normalize_performance(performance)
-    feature_name_locked = feature is not None
-    if feature is None:
-        feature = slugify(request)
-    if not validate_slug(feature):
-        raise HarnessError("Feature name must use lowercase letters, numbers, and hyphens.")
-    if state_path(feature).exists():
-        raise HarnessError(f"Run already exists: {feature}")
-
-    feature_dir(feature).mkdir(parents=True, exist_ok=True)
-    state = {
-        "feature_name": feature,
-        "feature_name_locked": feature_name_locked,
-        "request": request,
-        "pipeline_mode": PIPELINE_MODE,
-        "performance": performance_name,
-        "defaults_mode": defaults_mode,
-        "current_stage": START_STAGE,
-        "status": "created",
-        "created_at": iso_now(),
-        "updated_at": iso_now(),
-        "baseline_dirty": git_changed_paths(),
-        "attempts": {},
-        "commits": {},
-        "approved_stages": [],
-        "events": [],
-    }
-    ensure_provider_schedule(state, persist=False, console=False, record_event=False)
-    save_state(state)
-    log_event(
-        state,
-        "run_created",
-        "created feature run",
-        request=request,
-        feature=feature,
-        performance=performance_name,
-        defaults_mode=defaults_mode,
-    )
-    log_event(
-        state,
-        "provider_schedule_created",
-        "created provider schedule",
-        schedule=json.dumps(state.get("provider_schedule", {}), ensure_ascii=False),
-    )
-    generate_prompt(state, START_STAGE)
-    return state
+    return workflow_core._with_ctx(globals(), workflow_core._create_run, request, feature, defaults_mode, performance)
 
 
 def apply_runtime_performance(state: dict[str, Any], performance: Any | None) -> dict[str, Any]:
-    if performance is None:
-        return state
-    performance_name = normalize_performance(performance)
-    previous = state.get("performance")
-    state["performance"] = performance_name
-    if previous != performance_name:
-        log_event(
-            state,
-            "performance_updated",
-            "performance profile updated",
-            performance=performance_name,
-            previous_performance=previous,
-        )
-    save_state(state)
-    return state
+    return workflow_core._with_ctx(globals(), workflow_core._apply_runtime_performance, state, performance)
 
 
 def latest_provider_artifacts(
@@ -4122,57 +1404,23 @@ def latest_provider_artifacts(
     stage: str,
     state: dict[str, Any] | None = None,
 ) -> dict[str, str]:
-    try:
-        provider = provider_for_stage(stage, state)
-    except Exception:
-        provider = "unknown"
-    attempt = 1
-    if state:
-        attempt = int(state.get("attempts", {}).get(stage, 1))
-    logs_dir = run_dir(feature) / "logs"
-    artifacts = {
-        "provider": provider,
-        "stdout": rel(logs_dir / f"{stage}_attempt{attempt}_{provider}.out.txt"),
-        "stderr": rel(logs_dir / f"{stage}_attempt{attempt}_{provider}.err.txt"),
-        "meta": rel(logs_dir / f"{stage}_attempt{attempt}_{provider}.json"),
-        "provider_log": rel(logs_dir / f"{stage}_attempt{attempt}_{provider}.cli.log"),
-    }
-    return artifacts
+    return workflow_core._with_ctx(globals(), workflow_core._latest_provider_artifacts, feature, stage, state)
 
 
 def handoff_path(feature: str) -> Path:
-    return run_dir(feature) / "handoff.md"
+    return workflow_core._with_ctx(globals(), workflow_core._handoff_path, feature)
 
 
 def safe_read_tail(path: Path, lines: int = 40, max_chars: int = 6000) -> str:
-    if not path.exists():
-        return ""
-    try:
-        content = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return ""
-    text = "\n".join(content[-lines:])
-    if len(text) > max_chars:
-        return text[-max_chars:]
-    return text
+    return workflow_core._with_ctx(globals(), workflow_core._safe_read_tail, path, lines, max_chars)
 
 
 def latest_verification_summary(feature: str) -> dict[str, Any] | None:
-    path = latest_verification_result_path(feature)
-    if not path.exists():
-        return None
-    try:
-        parsed = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None
-    return parsed if isinstance(parsed, dict) else None
+    return workflow_core._with_ctx(globals(), workflow_core._latest_verification_summary, feature)
 
 
 def recent_events(state: dict[str, Any], limit: int = 8) -> list[dict[str, Any]]:
-    events = state.get("events", [])
-    if not isinstance(events, list):
-        return []
-    return [event for event in events[-limit:] if isinstance(event, dict)]
+    return workflow_core._with_ctx(globals(), workflow_core._recent_events, state, limit)
 
 
 def write_handoff(
@@ -4183,106 +1431,7 @@ def write_handoff(
     next_action: str | None = None,
     result: dict[str, Any] | None = None,
 ) -> Path:
-    feature = state["feature_name"]
-    stage = stage or str(state.get("current_stage") or "")
-    path = handoff_path(feature)
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    expected_md = stage_output_path(feature, stage) if stage in STAGES else None
-    expected_json = stage_result_json_path(feature, stage) if stage in STAGES else None
-    artifacts = latest_provider_artifacts(feature, stage, state) if stage in STAGES else {}
-    verification = latest_verification_summary(feature)
-
-    lines = [
-        "# 실패 인수인계",
-        "",
-        f"- feature: {feature}",
-        f"- pipeline_mode: {state.get('pipeline_mode') or PIPELINE_MODE}",
-        f"- stage: {stage or '-'}",
-        f"- status: {state.get('status') or '-'}",
-        f"- generated_at: {iso_now()}",
-        f"- reason: {reason}",
-    ]
-    if next_action:
-        lines.append(f"- next_action: {next_action}")
-    if expected_md:
-        lines.append(f"- expected_md: {rel(expected_md)}")
-    if expected_json:
-        lines.append(f"- expected_json: {rel(expected_json)}")
-    if state.get("current_prompt"):
-        lines.append(f"- current_prompt: {state['current_prompt']}")
-    if state.get("last_harness_verification"):
-        lines.append(f"- latest_harness_verification: {state['last_harness_verification']}")
-
-    lines.extend(["", "## 확인할 로그"])
-    if artifacts:
-        lines.extend(
-            [
-                f"- provider: {artifacts.get('provider')}",
-                f"- stdout: {artifacts.get('stdout')}",
-                f"- stderr: {artifacts.get('stderr')}",
-                f"- meta: {artifacts.get('meta')}",
-                f"- provider_log: {artifacts.get('provider_log')}",
-            ]
-        )
-    else:
-        lines.append("- provider log: 없음")
-
-    if result:
-        lines.extend(["", "## 단계 결과"])
-        lines.append("```json")
-        lines.append(json.dumps(result, ensure_ascii=False, indent=2))
-        lines.append("```")
-
-    if verification:
-        lines.extend(["", "## 최근 하네스 검증"])
-        lines.append("```json")
-        lines.append(
-            json.dumps(
-                {
-                    "status": verification.get("status"),
-                    "failed_commands": verification.get("failed_commands", []),
-                    "latest_path": verification.get("latest_path"),
-                },
-                ensure_ascii=False,
-                indent=2,
-            )
-        )
-        lines.append("```")
-
-    events = recent_events(state)
-    if events:
-        lines.extend(["", "## 최근 이벤트"])
-        for event in events:
-            lines.append(
-                f"- {event.get('at', '')} [{event.get('stage') or '-'}] "
-                f"{event.get('event')}: {event.get('message', '')}"
-            )
-
-    if artifacts:
-        stdout_tail = safe_read_tail(ROOT / artifacts["stdout"], lines=20)
-        stderr_tail = safe_read_tail(ROOT / artifacts["stderr"], lines=20)
-        provider_log_tail = safe_read_tail(ROOT / artifacts["provider_log"], lines=30)
-        if stdout_tail:
-            lines.extend(["", "## stdout 마지막 부분", "```text", stdout_tail, "```"])
-        if stderr_tail:
-            lines.extend(["", "## stderr 마지막 부분", "```text", stderr_tail, "```"])
-        if provider_log_tail:
-            lines.extend(["", "## provider log 마지막 부분", "```text", provider_log_tail, "```"])
-
-    lines.extend(
-        [
-            "",
-            "## 다음 모델에게",
-            "- 위 reason을 먼저 해결한다.",
-            "- 사람이 읽는 md 산출물과 하네스가 읽는 result.json을 둘 다 작성한다.",
-            "- Git 커밋은 하지 않는다. 하네스가 커밋을 소유한다.",
-        ]
-    )
-
-    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
-    state["last_handoff"] = rel(path)
-    return path
+    return workflow_core._with_ctx(globals(), workflow_core._write_handoff, state, reason, stage=stage, next_action=next_action, result=result)
 
 
 def missing_stage_output_message(
@@ -4291,39 +1440,7 @@ def missing_stage_output_message(
     output: Path,
     state: dict[str, Any] | None = None,
 ) -> str:
-    artifacts = latest_provider_artifacts(feature, stage, state)
-    provider = artifacts["provider"]
-    harness_script = ".ai\\harness_fast.py" if state and state.get("pipeline_mode") == "fast" else ".ai\\harness.py"
-    return "\n".join(
-        [
-            color_text("[실패] 필수 단계 산출물이 없습니다.", "red", "bold"),
-            "",
-            color_text("예상 파일:", "yellow", "bold"),
-            f"  {rel(output)}",
-            "",
-            color_text("무슨 일이 있었나:", "cyan", "bold"),
-            (
-                f"  {provider} provider는 종료됐지만, 하네스가 요구한 stage output 파일을 "
-                "현재 저장소 안에 만들지 않았습니다."
-            ),
-            "",
-            color_text("가능한 원인:", "yellow", "bold"),
-            "  1. provider가 다른 workspace를 작업 대상으로 잡았습니다.",
-            "  2. 모델이 필수 출력 경로 지시를 따르지 않았습니다.",
-            "  3. 파일 생성 권한 또는 경로 문제가 있었습니다.",
-            "",
-            color_text("확인할 로그:", "cyan", "bold"),
-            f"  stdout: {artifacts['stdout']}",
-            f"  stderr: {artifacts['stderr']}",
-            f"  meta:   {artifacts['meta']}",
-            f"  provider_log: {artifacts['provider_log']}",
-            "",
-            color_text("다음 조치:", "green", "bold"),
-            f"  python {harness_script} status {feature}",
-            f"  python {harness_script} log {feature} --lines 80",
-            "  필요하면 cleanup 후 같은 요청으로 다시 실행하세요.",
-        ]
-    )
+    return workflow_core._with_ctx(globals(), workflow_core._missing_stage_output_message, feature, stage, output, state)
 
 
 def load_stage_result(
@@ -4331,370 +1448,43 @@ def load_stage_result(
     stage: str,
     state: dict[str, Any] | None = None,
 ) -> tuple[Path, str, dict[str, Any]]:
-    output = stage_output_path(feature, stage)
-    if not output.exists():
-        if state is not None:
-            state["status"] = "blocked"
-            state["blocked"] = {
-                "stage": stage,
-                "reason": f"Missing stage output: {rel(output)}",
-                "next_stage": stage,
-            }
-            write_handoff(
-                state,
-                f"Missing stage output: {rel(output)}",
-                stage=stage,
-                next_action="retry 명령으로 현재 단계를 다시 실행하거나 provider 로그를 확인하세요.",
-            )
-            save_state(state)
-        raise HarnessError(missing_stage_output_message(feature, stage, output, state))
-    text = output.read_text(encoding="utf-8")
-    result_json = stage_result_json_path(feature, stage)
-    if result_json.exists():
-        try:
-            result = read_stage_result_json(result_json)
-        except HarnessError as exc:
-            if state is not None:
-                state["status"] = "blocked"
-                state["blocked"] = {
-                    "stage": stage,
-                    "reason": str(exc),
-                    "next_stage": stage,
-                }
-                write_handoff(
-                    state,
-                    str(exc),
-                    stage=stage,
-                    next_action="result.json 형식을 고치거나 retry 명령으로 현재 단계를 다시 실행하세요.",
-                )
-                save_state(state)
-            raise
-    else:
-        result = find_stage_result(text)
-    if not result:
-        if state is not None:
-            state["status"] = "blocked"
-            state["blocked"] = {
-                "stage": stage,
-                "reason": (
-                    f"Missing stage result. Expected {rel(result_json)} or "
-                    f"'## 단계 결과' block in {rel(output)}"
-                ),
-                "next_stage": stage,
-            }
-            write_handoff(
-                state,
-                str(state["blocked"]["reason"]),
-                stage=stage,
-                next_action="result.json을 보강하거나 retry 명령으로 현재 단계를 다시 실행하세요.",
-            )
-            save_state(state)
-        raise HarnessError(
-            f"Missing stage result. Expected {rel(result_json)} or '## 단계 결과' block in {rel(output)}"
-        )
-    return output, text, result
+    return workflow_core._with_ctx(globals(), workflow_core._load_stage_result, feature, stage, state)
 
 
 def expected_docx_path(feature: str) -> Path:
-    return DOCS_DIR / f"{feature}_명세서.docx"
+    return workflow_core._with_ctx(globals(), workflow_core._expected_docx_path, feature)
 
 
 def validate_docx_file(path: Path) -> str | None:
-    if not path.exists():
-        return f"Missing document artifact: {rel(path)}"
-    if not path.is_file():
-        return f"Document artifact is not a file: {rel(path)}"
-
-    try:
-        with path.open("rb") as fh:
-            signature = fh.read(2)
-    except OSError as exc:
-        return f"Cannot read document artifact {rel(path)}: {exc}"
-
-    if signature != b"PK":
-        return (
-            f"Invalid .docx artifact {rel(path)}: expected ZIP/OOXML signature "
-            f"'PK', got {signature!r}. Do not save Markdown/plain text with a .docx extension."
-        )
-
-    if not zipfile.is_zipfile(path):
-        return f"Invalid .docx artifact {rel(path)}: file is not a valid ZIP archive."
-
-    required_entries = {"[Content_Types].xml", "word/document.xml"}
-    try:
-        with zipfile.ZipFile(path) as zf:
-            names = set(zf.namelist())
-            missing = sorted(required_entries - names)
-            if missing:
-                return (
-                    f"Invalid .docx artifact {rel(path)}: missing OOXML entries "
-                    f"{', '.join(missing)}."
-                )
-            if not zf.read("word/document.xml").strip():
-                return f"Invalid .docx artifact {rel(path)}: word/document.xml is empty."
-    except (OSError, zipfile.BadZipFile, KeyError) as exc:
-        return f"Invalid .docx artifact {rel(path)}: {exc}"
-
-    return None
+    return core_validate_docx_file(path, rel(path))
 
 
 def validate_document_stage_artifacts(feature: str) -> str | None:
-    return validate_docx_file(expected_docx_path(feature))
+    return workflow_core._with_ctx(globals(), workflow_core._validate_document_stage_artifacts, feature)
 
 
 def block_state(state: dict[str, Any], stage: str, reason: str, next_stage: str | None = None) -> None:
-    state["status"] = "blocked"
-    state["blocked"] = {"stage": stage, "reason": reason, "next_stage": next_stage}
-    write_handoff(
-        state,
-        reason,
-        stage=stage,
-        next_action="원인을 확인한 뒤 approve, retry, resume 중 맞는 명령으로 이어가세요.",
-    )
-    log_event(state, "blocked", reason, stage=stage, next_stage=next_stage)
-    save_state(state)
+    return workflow_core._with_ctx(globals(), workflow_core._block_state, state, stage, reason, next_stage)
 
 
 def resume_run(feature: str, max_verify_fix_retries: int = DEFAULT_MAX_VERIFY_FIX_RETRIES) -> dict[str, Any]:
-    state = load_state(feature)
-    if max_verify_fix_retries < 0:
-        raise HarnessError("max_verify_fix_retries must be zero or greater.")
-    stage = state["current_stage"]
-    if stage == PC_REVIEW_STAGE:
-        return finish_pc_candidate_extraction(state)
-    if stage not in STAGES:
-        raise HarnessError(f"Unknown current stage: {stage}")
-
-    output, text, result = load_stage_result(state["feature_name"], stage, state)
-    if stage == START_STAGE:
-        state = maybe_rename_feature(state)
-        feature = state["feature_name"]
-        output, text, result = load_stage_result(feature, stage, state)
-
-    status = stage_status(result)
-    next_stage = str(result.get("next_stage") or stage_default_next(stage) or "")
-    log_event(state, "stage_result", "parsed stage result", stage=stage, status=status, next_stage=next_stage)
-    if stage == VERIFY_STAGE and status == "FAIL":
-        next_stage = VERIFY_RETRY_TARGET_STAGE
-    if status not in {"PASS", "FAIL", "SKIPPED", "NEEDS_USER"}:
-        raise HarnessError(f"Invalid or missing status in {rel(output)}: {status!r}")
-
-    violations = write_policy_violations(state, stage)
-    if violations:
-        block_state(
-            state,
-            stage,
-            "Write policy violation: " + "; ".join(violations),
-            stage,
-        )
-        return state
-
-    if status == "NEEDS_USER":
-        block_state(state, stage, result.get("blocking_reason") or "Stage requested user input.", stage)
-        return state
-
-    if status == "FAIL" and stage != VERIFY_STAGE:
-        block_state(state, stage, result.get("blocking_reason") or "Stage failed.", next_stage)
-        return state
-
-    if DOCUMENT_STAGE and status == "PASS" and stage == DOCUMENT_STAGE:
-        artifact_error = validate_document_stage_artifacts(state["feature_name"])
-        if artifact_error:
-            block_state(state, stage, artifact_error, stage)
-            return state
-
-    human_gate = boolish(result.get("human_gate_required"))
-    approved = stage in state.get("approved_stages", [])
-    if status == "PASS" and human_gate and not approved:
-        block_state(state, stage, "Human gate approval required.", next_stage)
-        return state
-
-    if stage == VERIFY_STAGE:
-        status, next_stage = enforce_harness_verify_result(state, result, status, next_stage)
-
-    if stage == VERIFY_STAGE and status == "FAIL":
-        retries_used = int(state.get("verify_fix_retries_used", 0))
-        if retries_used >= max_verify_fix_retries:
-            block_state(
-                state,
-                stage,
-                (
-                    "Verify/Fix retry limit reached "
-                    f"({retries_used}/{max_verify_fix_retries}). "
-                    "Resume with a higher --max-verify-fix-retries value if this feature needs more iterations."
-                ),
-                stage,
-            )
-            return state
-        state["verify_fix_retries_used"] = retries_used + 1
-        log_event(
-            state,
-            "verify_fix_retry_recorded",
-            "recorded verify/fix retry",
-            stage=stage,
-            retries_used=state["verify_fix_retries_used"],
-            max_verify_fix_retries=max_verify_fix_retries,
-        )
-        save_state(state)
-
-    commit_for_stage(state, stage, result)
-
-    if stage == VERIFY_STAGE and status == "FAIL":
-        write_handoff(
-            state,
-            result.get("blocking_reason") or "Verify stage failed.",
-            stage=stage,
-            next_action=f"{VERIFY_RETRY_TARGET_STAGE} 단계가 이 실패를 수정해야 합니다.",
-            result=result,
-        )
-        state["current_stage"] = VERIFY_RETRY_TARGET_STAGE
-        state["status"] = "waiting_for_model"
-        log_event(
-            state,
-            "verify_failed_returning_to_development",
-            f"returning to {VERIFY_RETRY_TARGET_STAGE} after failed verify",
-            stage=stage,
-        )
-        generate_prompt(state, VERIFY_RETRY_TARGET_STAGE)
-        return state
-
-    if (DOCUMENT_STAGE and stage == DOCUMENT_STAGE) or next_stage == "done":
-        if should_extract_pc_candidates(state):
-            state["status"] = "pc_candidates_pending"
-            state["current_stage"] = PC_REVIEW_STAGE
-            state["pc_candidate_source_stage"] = stage
-            log_event(
-                state,
-                "pc_candidate_extraction_queued",
-                "queued project contract candidate extraction",
-                stage=stage,
-            )
-            save_state(state)
-            return finish_pc_candidate_extraction(state)
-        return complete_run(state, stage)
-
-    if next_stage not in STAGES:
-        raise HarnessError(f"Invalid next_stage: {next_stage}")
-
-    state["current_stage"] = next_stage
-    state["status"] = "waiting_for_model"
-    state.pop("blocked", None)
-    log_event(state, "stage_advanced", "advanced to next stage", stage=stage, next_stage=next_stage)
-    save_state(state)
-    generate_prompt(state, next_stage)
-    return state
+    return workflow_core._with_ctx(globals(), workflow_core._resume_run, feature, max_verify_fix_retries)
 
 
 def approve_run(feature: str, max_verify_fix_retries: int = DEFAULT_MAX_VERIFY_FIX_RETRIES) -> dict[str, Any]:
-    state = load_state(feature)
-    blocked = state.get("blocked")
-    if not blocked:
-        raise HarnessError("Run is not blocked.")
-    stage = blocked.get("stage")
-    next_stage = blocked.get("next_stage")
-    if not stage:
-        raise HarnessError("Blocked state has no stage.")
-    state.setdefault("approved_stages", []).append(stage)
-    log_event(state, "approved", "human gate approved", stage=stage)
-    state.pop("blocked", None)
-    save_state(state)
-
-    if next_stage and next_stage in STAGES and next_stage != stage:
-        state["current_stage"] = next_stage
-        state["status"] = "waiting_for_model"
-        save_state(state)
-        generate_prompt(state, next_stage)
-        return state
-
-    return resume_run(state["feature_name"], max_verify_fix_retries=max_verify_fix_retries)
+    return workflow_core._with_ctx(globals(), workflow_core._approve_run, feature, max_verify_fix_retries)
 
 
 def build_retry_context(state: dict[str, Any], stage: str) -> str:
-    feature = state["feature_name"]
-    blocked = state.get("blocked") if isinstance(state.get("blocked"), dict) else {}
-    reason = str(blocked.get("reason") or "Manual retry requested.")
-    handoff = write_handoff(
-        state,
-        reason,
-        stage=stage,
-        next_action="retry가 현재 단계를 보강 프롬프트로 다시 실행합니다.",
-    )
-    artifacts = latest_provider_artifacts(feature, stage, state)
-    output = stage_output_path(feature, stage)
-    result_json = stage_result_json_path(feature, stage)
-    parts = [
-        "This is a retry of the current stage. Fix the previous failure and overwrite both required outputs.",
-        "",
-        f"- retry_stage: {stage}",
-        f"- failure_reason: {reason}",
-        f"- handoff_file: {rel(handoff)}",
-        f"- required_md_output: {rel(output)}",
-        f"- required_result_json: {rel(result_json)}",
-        f"- provider_stdout: {artifacts['stdout']}",
-        f"- provider_stderr: {artifacts['stderr']}",
-        f"- provider_meta: {artifacts['meta']}",
-        "",
-        "Retry checklist:",
-        "1. Work in the repository root shown by the harness context.",
-        "2. Do not reuse stale stage results. Overwrite the md output and result.json for this stage.",
-        "3. If the prior failure was a missing output, create the exact paths above.",
-        "4. If verification failed, read the latest verification JSON and fix the failed commands.",
-        "5. Do not commit. The harness owns Git history.",
-    ]
-    verification = latest_verification_result_path(feature)
-    if verification.exists():
-        parts.append(f"- latest_harness_verification: {rel(verification)}")
-    handoff_tail = safe_read_tail(handoff, lines=80)
-    if handoff_tail:
-        parts.extend(["", "Latest handoff.md:", "```md", handoff_tail, "```"])
-    return "\n".join(parts)
+    return workflow_core._with_ctx(globals(), workflow_core._build_retry_context, state, stage)
 
 
 def copy_same_prompt_for_retry(state: dict[str, Any], stage: str) -> Path:
-    current_prompt = state.get("current_prompt")
-    if not current_prompt:
-        return generate_prompt(state, stage)
-    source = ROOT / current_prompt
-    if not source.exists():
-        return generate_prompt(state, stage)
-
-    state.setdefault("stage_file_snapshots", {})[stage] = file_policy_snapshot(state["feature_name"])
-    path = prompt_path(state, stage)
-    path.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
-    state["current_stage"] = stage
-    state["current_prompt"] = rel(path)
-    state["status"] = "waiting_for_model"
-    state.pop("blocked", None)
-    log_event(state, "retry_prompt_generated", "copied same prompt for retry", stage=stage, path=rel(path))
-    save_state(state)
-    return path
+    return workflow_core._with_ctx(globals(), workflow_core._copy_same_prompt_for_retry, state, stage)
 
 
 def archive_stage_outputs_for_retry(state: dict[str, Any], stage: str) -> None:
-    feature = state["feature_name"]
-    archive_dir = run_dir(feature) / "retry_archives"
-    archive_dir.mkdir(parents=True, exist_ok=True)
-    attempt = int(state.get("attempts", {}).get(stage, 0) or 0)
-    stamp = now_stamp()
-    archived: list[str] = []
-    for path in [stage_output_path(feature, stage), stage_result_json_path(feature, stage)]:
-        if not path.exists():
-            continue
-        target = archive_dir / f"{stage}_attempt{attempt}_{stamp}_{path.name}"
-        shutil.copyfile(path, target)
-        path.unlink()
-        archived.append(rel(target))
-    if archived:
-        state.setdefault("retry_archives", []).append(
-            {"stage": stage, "at": iso_now(), "files": archived}
-        )
-        log_event(
-            state,
-            "retry_outputs_archived",
-            "archived stale stage outputs before retry",
-            stage=stage,
-            files=",".join(archived),
-        )
+    return workflow_core._with_ctx(globals(), workflow_core._archive_stage_outputs_for_retry, state, stage)
 
 
 def retry_run(
@@ -4709,47 +1499,7 @@ def retry_run(
     max_steps: int,
     max_verify_fix_retries: int,
 ) -> dict[str, Any]:
-    state = load_state(feature)
-    if defaults:
-        state["defaults_mode"] = True
-        log_event(state, "defaults_mode_enabled", "defaults mode enabled before retry")
-    blocked = state.get("blocked") if isinstance(state.get("blocked"), dict) else {}
-    stage = str(blocked.get("stage") or state.get("current_stage") or "")
-    if stage not in STAGES:
-        raise HarnessError(f"Cannot retry stage: {stage!r}")
-    if state.get("status") == "complete" or stage == "done":
-        raise HarnessError("Run is already complete; there is no current stage to retry.")
-
-    state["current_stage"] = stage
-    if same:
-        archive_stage_outputs_for_retry(state, stage)
-        copy_same_prompt_for_retry(state, stage)
-        state = load_state(feature)
-    else:
-        retry_context = build_retry_context(state, stage)
-        archive_stage_outputs_for_retry(state, stage)
-        state.pop("blocked", None)
-        generate_prompt(state, stage, retry_context=retry_context)
-        state = load_state(feature)
-        log_event(state, "retry_prompt_generated", "generated enriched retry prompt", stage=stage)
-        save_state(state)
-
-    if prompt_only:
-        return state
-
-    state = execute_current_prompt(state, timeout_seconds)
-    if state.get("status") == "blocked":
-        return state
-    state = resume_run(state["feature_name"], max_verify_fix_retries=max_verify_fix_retries)
-    if auto and state.get("status") not in {"complete", "blocked"}:
-        state = auto_drive(
-            state,
-            yes=yes,
-            timeout_seconds=timeout_seconds,
-            max_steps=max_steps,
-            max_verify_fix_retries=max_verify_fix_retries,
-        )
-    return state
+    return workflow_core._with_ctx(globals(), workflow_core._retry_run, feature, same=same, prompt_only=prompt_only, auto=auto, yes=yes, defaults=defaults, timeout_seconds=timeout_seconds, max_steps=max_steps, max_verify_fix_retries=max_verify_fix_retries)
 
 
 def print_status(feature: str | None) -> None:
