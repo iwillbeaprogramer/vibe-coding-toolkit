@@ -1,0 +1,65 @@
+{
+  "feature_name": "project-initialize",
+  "stage": "05_verify",
+  "attempt": 1,
+  "result_path": ".ai/runs/project-initialize/verification/05_verify_attempt1_20260528-082312.json",
+  "latest_path": ".ai/runs/project-initialize/verification/latest.json",
+  "started_at": "2026-05-28T08:23:12",
+  "finished_at": "2026-05-28T08:23:12",
+  "required": true,
+  "passed": true,
+  "status": "PASS",
+  "commands": [
+    {
+      "name": "harness-python-compile",
+      "command": [
+        "python",
+        "-m",
+        "py_compile",
+        ".ai\\harness.py",
+        ".ai\\harness_fast.py",
+        ".ai\\harness_standard.py",
+        ".ai\\pc_review.py",
+        ".ai\\templates\\docx_helper.py",
+        ".ai\\harness_core\\__init__.py",
+        ".ai\\harness_core\\text.py",
+        ".ai\\harness_core\\frontmatter.py",
+        ".ai\\harness_core\\history.py",
+        ".ai\\harness_core\\json_io.py",
+        ".ai\\harness_core\\docx_validation.py",
+        ".ai\\harness_core\\policy.py",
+        ".ai\\harness_core\\providers.py",
+        ".ai\\harness_core\\stage_runtime.py",
+        ".ai\\harness_core\\verification.py",
+        ".ai\\harness_core\\workflow.py"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 600,
+      "returncode": 0,
+      "elapsed_seconds": 0.15,
+      "passed": true,
+      "timed_out": false,
+      "stdout": ".ai/runs/project-initialize/verification/05_verify_attempt1_harness-python-compile.out.txt",
+      "stderr": ".ai/runs/project-initialize/verification/05_verify_attempt1_harness-python-compile.err.txt"
+    },
+    {
+      "name": "git-diff-check",
+      "command": [
+        "git",
+        "-c",
+        "safe.directory=D:\\test\\vibe-coding-toolkit\\vibe-coding-toolkit",
+        "diff",
+        "--check"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 600,
+      "returncode": 0,
+      "elapsed_seconds": 0.06,
+      "passed": true,
+      "timed_out": false,
+      "stdout": ".ai/runs/project-initialize/verification/05_verify_attempt1_git-diff-check.out.txt",
+      "stderr": ".ai/runs/project-initialize/verification/05_verify_attempt1_git-diff-check.err.txt"
+    }
+  ],
+  "failed_commands": []
+}

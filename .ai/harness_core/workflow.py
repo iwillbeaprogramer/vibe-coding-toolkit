@@ -42,27 +42,31 @@ def _finish_pc_candidate_extraction(state: dict[str, Any]) -> dict[str, Any]:
     try:
         extraction = extract_project_contract_candidates(state)
     except Exception as exc:
-        state["status"] = "blocked"
-        state["current_stage"] = PC_REVIEW_STAGE
-        state["blocked"] = {
-            "stage": PC_REVIEW_STAGE,
-            "reason": f"PC candidate extraction failed: {exc}",
-            "next_stage": PC_REVIEW_STAGE,
+        extraction = {
+            "status": "WARN",
+            "provider": "unknown",
+            "attempts": 0,
+            "raw_candidate_count": 0,
+            "candidate_count": 0,
+            "filtered_out_count": 0,
+            "recorded_count": 0,
+            "candidate_ids": [],
+            "candidates_path": rel(pc_candidates_path()),
+            "warning": "Project Contract candidate extraction failed before retries completed.",
+            "failures": [{"attempt": 0, "reason": str(exc)}],
         }
-        write_handoff(
-            state,
-            str(state["blocked"]["reason"]),
-            stage=PC_REVIEW_STAGE,
-            next_action="PC 후보 추출 실패 원인을 확인한 뒤 resume으로 다시 시도하세요.",
-        )
+        state["pc_candidate_extraction"] = extraction
+        state.pop("blocked", None)
+        state.pop("pc_candidate_source_stage", None)
         log_event(
             state,
-            "pc_candidate_extraction_failed",
-            str(exc),
+            "pc_candidate_extraction_warning",
+            "project contract candidate extraction failed unexpectedly; continuing run",
             stage=PC_REVIEW_STAGE,
+            error=str(exc),
         )
         save_state(state)
-        return state
+        return complete_run(state, source_stage)
 
     state["pc_candidate_extraction"] = extraction
     state.pop("blocked", None)

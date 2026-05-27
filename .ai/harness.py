@@ -1116,9 +1116,17 @@ def log_event(
     feature = state["feature_name"]
     timestamp = iso_now()
     stage = stage or state.get("current_stage")
+    provider_schedule = state.get("provider_schedule")
+    scheduled_provider = (
+        provider_schedule.get(str(stage))
+        if isinstance(provider_schedule, dict) and stage
+        else None
+    )
+    agent = str(fields.get("agent") or fields.get("provider") or scheduled_provider or "harness")
     line = f"[{timestamp}] [{feature}]"
     if stage:
         line += f" [{stage}]"
+    line += f" [{agent}]"
     line += f" {event}: {message}"
     if fields:
         compact = " ".join(f"{key}={value}" for key, value in fields.items() if value is not None)
@@ -1130,7 +1138,7 @@ def log_event(
     with path.open("a", encoding="utf-8") as fh:
         fh.write(line + "\n")
     state.setdefault("events", []).append(
-        {"at": timestamp, "event": event, "stage": stage, "message": message, **fields}
+        {"at": timestamp, "event": event, "stage": stage, "agent": agent, "message": message, **fields}
     )
     if console:
         print(event_line_for_console(line, event), flush=True)

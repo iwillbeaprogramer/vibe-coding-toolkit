@@ -10,7 +10,7 @@
 - output_file: .ai/features/project-initialize/00_spec.md
 - result_json_file: .ai/features/project-initialize/00_spec.result.json
 - run_state: .ai/runs/project-initialize/run.json
-- generated_at: 2026-05-28T01:04:07
+- generated_at: 2026-05-28T07:56:26
 - defaults_mode: true
 - feature_name_locked: true
 
@@ -74,7 +74,7 @@ Source: .ai/project_contract.md
 
 
 ## Original User Request
-난 주식정보를 검색해서 결과를 보여주는 프로그램을 만들고싶어. Front는 react로하고, backend는 fastapi로 만들고싶어. 일단 검색해서 주식쟁이들이 흔히 보는 시가 종가 뭐 등등 엄청 정보 많잖아. 그것들으 전보 보여주면 좋겠어. 아 그리고 차트까지
+난 주식정보를 검색해서 디테일한 정보를 보는 윈도우 프로그램을 만들고싶어. 프론트는 React 백엔드는 파이썬 FastAPI로 제공하면 될거같아. 화면에서 종목명 예를들어 QLD를 검색하면 그 정보들을 주는거지. 주식쟁이들이 흔히 하는 정보들있자나 현재가, 종가 뭐 등등 엄청많아. 이것들을 다 보여주고, 차트까지 보였으면 좋겠어
 
 ## Previous Stage Outputs
 - none
@@ -86,7 +86,7 @@ Source: .ai/project_contract.md
 - none
 
 ## Current Git Hints
-- current_head: 1610f2648a2ea075abade533865ee1fa217145b7
+- current_head: 1249abcf0fcc4f1edca3a47c24968c6186bcacdb
 - changed_paths_excluding_runs: []
 - latest_harness_verification: none
 

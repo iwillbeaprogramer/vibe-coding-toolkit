@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import Any
 
 
+PC_CANDIDATE_EXTRACTION_MAX_ATTEMPTS = 3
+
+
 def _history_summary_path() -> Path:
     return HISTORY_DIR / "summary.md"
 
@@ -1230,28 +1233,7 @@ def _append_pc_candidates(candidates: list[dict[str, Any]], state: dict[str, Any
     }
 
 
-def _extract_project_contract_candidates(state: dict[str, Any]) -> dict[str, Any]:
-    if not should_extract_pc_candidates(state):
-        return {"status": "skipped", "reason": "pipeline does not extract PC candidates"}
-
-    feature = str(state["feature_name"])
-    provider = provider_for_stage(PC_REVIEW_STAGE, state)
-    prompt = build_pc_candidate_extraction_prompt(state)
-    log_event(
-        state,
-        "pc_candidate_extraction_started",
-        "extracting project contract candidates",
-        stage=PC_REVIEW_STAGE,
-        provider=provider,
-    )
-    result = run_text_provider_prompt(
-        provider,
-        prompt,
-        logs_dir=run_dir(feature) / "logs",
-        log_prefix="pc_candidates",
-        timeout_seconds=3600,
-        performance=state.get("performance"),
-    )
+def _parse_pc_candidate_extraction_result(result: dict[str, Any]) -> list[Any]:
     if result.get("returncode") != 0 or result.get("timed_out"):
         raise HarnessError(
             "PC candidate extraction provider failed. "
@@ -1267,6 +1249,94 @@ def _extract_project_contract_candidates(state: dict[str, Any]) -> dict[str, Any
         )
     if not isinstance(raw_candidates, list):
         raise HarnessError("PC candidate extraction field 'candidates' must be a list.")
+    return raw_candidates
+
+
+def _pc_candidate_extraction_warning(
+    provider: str,
+    failures: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "status": "WARN",
+        "provider": provider,
+        "attempts": len(failures),
+        "raw_candidate_count": 0,
+        "candidate_count": 0,
+        "filtered_out_count": 0,
+        "recorded_count": 0,
+        "candidate_ids": [],
+        "candidates_path": rel(pc_candidates_path()),
+        "warning": "Project Contract candidate extraction failed after retries.",
+        "failures": failures,
+    }
+
+
+def _extract_project_contract_candidates(state: dict[str, Any]) -> dict[str, Any]:
+    if not should_extract_pc_candidates(state):
+        return {"status": "skipped", "reason": "pipeline does not extract PC candidates"}
+
+    feature = str(state["feature_name"])
+    provider = provider_for_stage(PC_REVIEW_STAGE, state)
+    prompt = build_pc_candidate_extraction_prompt(state)
+    failures: list[dict[str, Any]] = []
+    result: dict[str, Any] = {}
+    raw_candidates: list[Any] | None = None
+
+    for attempt in range(1, PC_CANDIDATE_EXTRACTION_MAX_ATTEMPTS + 1):
+        attempt_result: dict[str, Any] = {}
+        log_event(
+            state,
+            "pc_candidate_extraction_started",
+            "extracting project contract candidates",
+            stage=PC_REVIEW_STAGE,
+            provider=provider,
+            attempt=attempt,
+            max_attempts=PC_CANDIDATE_EXTRACTION_MAX_ATTEMPTS,
+        )
+        try:
+            attempt_result = run_text_provider_prompt(
+                provider,
+                prompt,
+                logs_dir=run_dir(feature) / "logs",
+                log_prefix="pc_candidates",
+                timeout_seconds=3600,
+                performance=state.get("performance"),
+            )
+            result = attempt_result
+            raw_candidates = parse_pc_candidate_extraction_result(result)
+            break
+        except Exception as exc:
+            failures.append(
+                {
+                    "attempt": attempt,
+                    "reason": str(exc),
+                    "stdout": attempt_result.get("stdout"),
+                    "stderr": attempt_result.get("stderr"),
+                    "meta": attempt_result.get("meta"),
+                }
+            )
+            log_event(
+                state,
+                "pc_candidate_extraction_attempt_failed",
+                str(exc),
+                stage=PC_REVIEW_STAGE,
+                provider=provider,
+                attempt=attempt,
+                max_attempts=PC_CANDIDATE_EXTRACTION_MAX_ATTEMPTS,
+            )
+
+    if raw_candidates is None:
+        extraction = pc_candidate_extraction_warning(provider, failures)
+        state["pc_candidate_extraction"] = extraction
+        log_event(
+            state,
+            "pc_candidate_extraction_warning",
+            "project contract candidate extraction failed after retries; continuing run",
+            stage=PC_REVIEW_STAGE,
+            provider=provider,
+            attempts=len(failures),
+        )
+        return extraction
 
     created_at = iso_now()
     normalized = [
@@ -1298,6 +1368,7 @@ def _extract_project_contract_candidates(state: dict[str, Any]) -> dict[str, Any
         "pc_candidate_extraction_completed",
         "project contract candidates extracted",
         stage=PC_REVIEW_STAGE,
+        provider=provider,
         raw_candidate_count=len(raw_candidates),
         candidate_count=len(normalized),
         filtered_out_count=len(raw_candidates) - len(normalized),
@@ -1350,6 +1421,8 @@ _INTERNAL_NAMES = {
     'build_pc_candidate_extraction_prompt': _build_pc_candidate_extraction_prompt,
     'normalize_pc_candidate': _normalize_pc_candidate,
     'append_pc_candidates': _append_pc_candidates,
+    'parse_pc_candidate_extraction_result': _parse_pc_candidate_extraction_result,
+    'pc_candidate_extraction_warning': _pc_candidate_extraction_warning,
     'extract_project_contract_candidates': _extract_project_contract_candidates,
 }
 
