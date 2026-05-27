@@ -75,3 +75,11 @@ def test_invalid_interval_returns_400(client):
     response = client.get("/api/stocks/QLD", params={"interval": "1s"})
     assert response.status_code == 400
     assert response.json()["code"] == "invalid_interval"
+
+
+def test_upstream_history_failure_returns_502(failing_history_client):
+    response = failing_history_client.get("/api/stocks/QLD")
+    assert response.status_code == 502
+    body = response.json()
+    assert body["code"] == "upstream_history_failed"
+    assert "QLD" in body["message"] or body["details"].get("symbol") == "QLD"

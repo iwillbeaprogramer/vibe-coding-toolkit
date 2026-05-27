@@ -85,9 +85,28 @@ def fake_ticker_factory():
 
 
 @pytest.fixture
-def client(monkeypatch, fake_ticker_factory):
-    """FastAPI TestClient with yfinance patched to a deterministic fake."""
+def failing_history_ticker_factory():
+    """외부 history() 호출이 항상 예외를 던지는 가짜 Ticker 팩토리."""
 
+    class _FailingTicker:
+        def __init__(self, symbol: str):
+            self.symbol = symbol
+            self.info = {
+                "symbol": symbol,
+                "shortName": f"{symbol} Test",
+                "regularMarketPrice": 100.0,
+            }
+
+        def history(self, period: str = "6mo", interval: str = "1d"):
+            raise RuntimeError("simulated upstream history failure")
+
+    def factory(symbol: str):
+        return _FailingTicker(symbol)
+
+    return factory
+
+
+def _make_client(monkeypatch, injected_factory):
     from fastapi.testclient import TestClient
 
     from app.services import stock_service as svc
@@ -95,7 +114,7 @@ def client(monkeypatch, fake_ticker_factory):
     original_fetch = svc.fetch_stock_detail
 
     def patched_fetch(symbol, range_, interval, ticker_factory=None):
-        return original_fetch(symbol, range_, interval, ticker_factory=fake_ticker_factory)
+        return original_fetch(symbol, range_, interval, ticker_factory=injected_factory)
 
     monkeypatch.setattr(svc, "fetch_stock_detail", patched_fetch)
 
@@ -107,3 +126,17 @@ def client(monkeypatch, fake_ticker_factory):
 
     app = create_app()
     return TestClient(app)
+
+
+@pytest.fixture
+def client(monkeypatch, fake_ticker_factory):
+    """FastAPI TestClient with yfinance patched to a deterministic fake."""
+
+    return _make_client(monkeypatch, fake_ticker_factory)
+
+
+@pytest.fixture
+def failing_history_client(monkeypatch, failing_history_ticker_factory):
+    """history() 호출 시 예외를 던지는 fake로 TestClient를 구성한다."""
+
+    return _make_client(monkeypatch, failing_history_ticker_factory)
