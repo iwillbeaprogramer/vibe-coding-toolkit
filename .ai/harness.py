@@ -1363,36 +1363,12 @@ def latest_verification_result_path(feature: str) -> Path:
     return verification_dir(feature) / "latest.json"
 
 
-def history_events_path() -> Path:
-    return HISTORY_DIR / "events.json"
-
-
-def history_legacy_events_path() -> Path:
-    return HISTORY_DIR / "events.jsonl"
-
-
-def history_decisions_path() -> Path:
-    return HISTORY_DIR / "decisions.json"
-
-
-def history_legacy_decisions_path() -> Path:
-    return HISTORY_DIR / "decisions.jsonl"
-
-
-def history_risks_path() -> Path:
-    return HISTORY_DIR / "risks.json"
-
-
-def history_unresolved_items_path() -> Path:
-    return HISTORY_DIR / "unresolved_items.json"
-
-
-def history_features_dir() -> Path:
-    return HISTORY_DIR / "features"
-
-
 def history_summary_path() -> Path:
     return HISTORY_DIR / "summary.md"
+
+
+def history_index_path() -> Path:
+    return HISTORY_DIR / "index.json"
 
 
 def pc_candidates_path() -> Path:
@@ -1540,64 +1516,11 @@ def warn_pending_pc_candidates_for_new_run() -> None:
     print("\n".join(lines), file=sys.stderr)
 
 
-def history_collection_key(path: Path) -> str:
-    name = path.name.lower()
-    if name.startswith("event"):
-        return "events"
-    if name.startswith("decision"):
-        return "decisions"
-    return "items"
-
-
-def read_history_collection(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    if path.suffix.lower() == ".json":
-        parsed = read_json_file(path, {})
-        if isinstance(parsed, list):
-            return [item for item in parsed if isinstance(item, dict)]
-        if isinstance(parsed, dict):
-            collection = parsed.get(history_collection_key(path), [])
-            if isinstance(collection, list):
-                return [item for item in collection if isinstance(item, dict)]
-        return []
-
-    items: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            parsed = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(parsed, dict):
-            items.append(parsed)
-    return items
-
-
-def write_history_collection(path: Path, items: list[dict[str, Any]]) -> None:
-    key = history_collection_key(path)
-    write_json_file(path, {"schema_version": HISTORY_SCHEMA_VERSION, key: items})
-
-
 def ensure_history_store() -> bool:
     initialized = not HISTORY_DIR.exists()
     HISTORY_DIR.mkdir(parents=True, exist_ok=True)
-    history_features_dir().mkdir(parents=True, exist_ok=True)
-    if not history_events_path().exists():
-        write_history_collection(history_events_path(), read_history_collection(history_legacy_events_path()))
-        initialized = True
-    if not history_decisions_path().exists():
-        write_history_collection(history_decisions_path(), read_history_collection(history_legacy_decisions_path()))
-        initialized = True
-    if not history_risks_path().exists():
-        write_json_file(history_risks_path(), {"schema_version": HISTORY_SCHEMA_VERSION, "risks": []})
-        initialized = True
-    if not history_unresolved_items_path().exists():
-        write_json_file(
-            history_unresolved_items_path(),
-            {"schema_version": HISTORY_SCHEMA_VERSION, "items": []},
-        )
+    if not history_index_path().exists():
+        write_json_file(history_index_path(), {"schema_version": HISTORY_SCHEMA_VERSION, "features": []})
         initialized = True
     if not pc_candidates_path().exists():
         write_pc_candidates_store(empty_pc_candidates_store())
@@ -1605,32 +1528,11 @@ def ensure_history_store() -> bool:
     if not history_summary_path().exists():
         history_summary_path().write_text(
             "# 프로젝트 히스토리\n\n"
-            "로컬 하네스가 자동 생성한 장기 기록 요약입니다.\n",
+            "로컬 하네스가 자동 생성한 완료 run 인덱스 요약입니다.\n",
             encoding="utf-8",
         )
         initialized = True
     return initialized
-
-
-def iter_jsonl(path: Path) -> list[dict[str, Any]]:
-    return read_history_collection(path)
-
-
-def append_jsonl_if_missing(path: Path, item: dict[str, Any], id_key: str) -> bool:
-    item_id = str(item.get(id_key) or "")
-    if item_id:
-        for existing in iter_jsonl(path):
-            if str(existing.get(id_key) or "") == item_id:
-                return False
-    if path.suffix.lower() == ".json":
-        items = iter_jsonl(path)
-        items.append(item)
-        write_history_collection(path, items)
-        return True
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(item, ensure_ascii=False, sort_keys=True) + "\n")
-    return True
 
 
 def history_timestamp_id(value: Any) -> str:
@@ -2470,63 +2372,99 @@ def update_history_feature_summary(event: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
-def render_history_summary(
-    events: list[dict[str, Any]],
-    risks: list[dict[str, Any]],
-    unresolved_items: list[dict[str, Any]],
-) -> None:
-    complete_events = [event for event in events if event.get("event_type") == "run_completed"]
-    open_risks = [risk for risk in risks if str(risk.get("status") or "open").lower() == "open"]
-    active_unresolved = [
-        item
-        for item in unresolved_items
-        if str(item.get("status") or "open").lower() in {"open", "deferred"}
-    ]
+def read_history_index() -> dict[str, Any]:
+    index = read_json_file(history_index_path(), {"schema_version": HISTORY_SCHEMA_VERSION, "features": []})
+    if not isinstance(index, dict):
+        return {"schema_version": HISTORY_SCHEMA_VERSION, "features": []}
+    features = index.get("features")
+    if not isinstance(features, list):
+        index["features"] = []
+    else:
+        index["features"] = [item for item in features if isinstance(item, dict)]
+    index["schema_version"] = HISTORY_SCHEMA_VERSION
+    return index
+
+
+def write_history_index(index: dict[str, Any]) -> None:
+    write_json_file(history_index_path(), index)
+
+
+def compact_history_titles(items: list[Any], max_items: int = 5, max_len: int = 180) -> list[str]:
+    if max_items <= 0:
+        return []
+    titles: list[str] = []
+    for item in items:
+        if isinstance(item, dict):
+            value = (
+                item.get("title")
+                or item.get("summary")
+                or item.get("description")
+                or item.get("decision")
+                or item.get("risk")
+            )
+        else:
+            value = item
+        title = compact_history_text(value, max_len=max_len)
+        if title and title not in titles:
+            titles.append(title)
+        if len(titles) >= max_items:
+            break
+    return titles
+
+
+def history_document_path(feature: str) -> str:
+    if not DOCUMENT_STAGE:
+        return ""
+    doc = expected_docx_path(feature)
+    return rel(doc) if doc.exists() else ""
+
+
+def upsert_history_index_entry(entry: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    index = read_history_index()
+    features = index.setdefault("features", [])
+    feature = str(entry.get("feature") or "")
+    replaced = False
+    for position, existing in enumerate(features):
+        if isinstance(existing, dict) and existing.get("feature") == feature:
+            features[position] = entry
+            replaced = True
+            break
+    if not replaced:
+        features.append(entry)
+    features.sort(key=lambda item: str(item.get("completed_at") or ""), reverse=True)
+    index["updated_at"] = iso_now()
+    write_history_index(index)
+    return index, not replaced
+
+
+def render_history_summary(index: dict[str, Any]) -> None:
+    features = index.get("features") if isinstance(index.get("features"), list) else []
+    complete_features = [item for item in features if isinstance(item, dict)]
     lines = [
         "# 프로젝트 히스토리",
         "",
-        "로컬 하네스가 자동 생성한 장기 기록 요약입니다.",
+        "로컬 하네스가 자동 생성한 완료 run 인덱스 요약입니다.",
         "",
-        f"- 기록된 run: {len(complete_events)}",
-        f"- 열린 리스크 / 미래 개선점: {len(open_risks)}",
-        f"- 열린/보류 미해결 항목: {len(active_unresolved)}",
+        f"- 기록된 feature: {len(complete_features)}",
+        f"- 인덱스: {rel(history_index_path())}",
+        f"- PC 후보: {rel(pc_candidates_path())}",
         "",
         "## 최근 완료 Run",
         "",
     ]
-    if not complete_events:
+    if not complete_features:
         lines.append("- 없음")
-    for event in complete_events[-20:][::-1]:
-        verification = event.get("verification") if isinstance(event.get("verification"), dict) else {}
+    for entry in complete_features[:20]:
+        verification = str(entry.get("verification") or "UNKNOWN")
         lines.append(
             "- "
-            f"{event.get('completed_at', '')} "
-            f"{event.get('feature', '')} "
-            f"({event.get('pipeline', '')}, {event.get('status', '')}, verify={verification.get('status', 'UNKNOWN')})"
+            f"{entry.get('completed_at', '')} "
+            f"{entry.get('feature', '')} "
+            f"({entry.get('pipeline', '')}, {entry.get('status', '')}, verify={verification})"
         )
-        implemented = event.get("implemented") if isinstance(event.get("implemented"), list) else []
+        implemented = entry.get("implemented") if isinstance(entry.get("implemented"), list) else []
         for item in implemented[:3]:
             lines.append(f"  - {item}")
-    lines.extend(["", "## 열린 리스크와 후속 개선점", ""])
-    if not open_risks:
-        lines.append("- 없음")
-    for risk in sorted(open_risks, key=lambda item: str(item.get("updated_at")), reverse=True)[:30]:
-        lines.append(
-            "- "
-            f"[{risk.get('severity', 'medium')}] "
-            f"{risk.get('title', '')} "
-            f"(from {risk.get('introduced_by', '')})"
-        )
-    lines.extend(["", "## 미해결 리뷰/검증 항목", ""])
-    if not active_unresolved:
-        lines.append("- 없음")
-    for item in sorted(active_unresolved, key=lambda item: str(item.get("updated_at")), reverse=True)[:30]:
-        lines.append(
-            "- "
-            f"[{item.get('status', 'open')}/{item.get('severity', 'minor')}] "
-            f"{item.get('title', '')} "
-            f"(from {item.get('feature', '')}:{item.get('source_stage', '')})"
-        )
     history_summary_path().write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
 
@@ -2535,8 +2473,6 @@ def record_project_history(state: dict[str, Any]) -> dict[str, Any]:
     feature = str(state["feature_name"])
     stage_results = load_history_stage_results(feature)
     implemented, risks, future_improvements, decisions = collect_history_notes(feature, stage_results)
-    unresolved_items = collect_history_unresolved_items(feature, stage_results)
-    changed_files = collect_history_changed_files(state, stage_results)
     verification = load_history_verification(feature, stage_results)
     completed_at = iso_now()
     event_id = history_event_id(state)
@@ -2547,50 +2483,51 @@ def record_project_history(state: dict[str, Any]) -> dict[str, Any]:
     ]
     risk_level = risk_levels[-1] if risk_levels else ""
 
-    event = {
+    important_followups = compact_history_titles(future_improvements, max_items=5)
+    medium_high_risks = [
+        risk
+        for risk in risks
+        if isinstance(risk, dict)
+        and str(risk.get("severity") or "low").strip().lower() in {"medium", "high", "critical"}
+    ]
+    important_followups.extend(
+        item
+        for item in compact_history_titles(medium_high_risks, max_items=5 - len(important_followups))
+        if item not in important_followups
+    )
+
+    entry = {
         "schema_version": HISTORY_SCHEMA_VERSION,
-        "event_type": "run_completed",
         "event_id": event_id,
-        "제목": f"{feature} 기능 개발 기록",
-        "설명": compact_history_text(state.get("request"), max_len=800),
-        "history_initialized": initialized,
         "feature": feature,
         "pipeline": state.get("pipeline_mode") or PIPELINE_MODE,
         "status": state.get("status"),
         "created_at": state.get("created_at"),
         "completed_at": completed_at,
         "request_summary": compact_history_text(state.get("request"), max_len=800),
-        "implemented": implemented,
-        "changed_files": changed_files,
-        "verification": verification,
+        "verification": verification.get("status", "UNKNOWN") if isinstance(verification, dict) else "UNKNOWN",
+        "verification_source": verification.get("source", "") if isinstance(verification, dict) else "",
         "risk_level": risk_level,
-        "risks": risks,
-        "future_improvements": future_improvements,
-        "unresolved_items": unresolved_items,
-        "decisions": decisions,
+        "feature_dir": rel(feature_dir(feature)),
+        "run_dir": rel(run_dir(feature)),
+        "doc": history_document_path(feature),
         "commits": state.get("commits", {}),
-        "source_artifacts": history_source_artifacts(feature),
+        "implemented": compact_history_titles(implemented, max_items=8),
+        "important_followups": important_followups[:5],
+        "important_decisions": compact_history_titles(decisions, max_items=5),
     }
 
-    appended = append_jsonl_if_missing(history_events_path(), event, "event_id")
-    update_history_feature_summary(event)
-    updated_risks = update_history_risks(event)
-    updated_unresolved_items = update_history_unresolved_items(event)
-    appended_decisions = append_history_decisions(event)
-    render_history_summary(iter_jsonl(history_events_path()), updated_risks, updated_unresolved_items)
+    index, inserted = upsert_history_index_entry(entry)
+    render_history_summary(index)
 
     state["history"] = {
         "schema_version": HISTORY_SCHEMA_VERSION,
         "event_id": event_id,
-        "events": rel(history_events_path()),
-        "feature_summary": rel(history_features_dir() / f"{feature}.json"),
-        "risks": rel(history_risks_path()),
-        "unresolved_items": rel(history_unresolved_items_path()),
-        "decisions": rel(history_decisions_path()),
+        "index": rel(history_index_path()),
         "summary": rel(history_summary_path()),
-        "status": "recorded" if appended else "already_recorded",
+        "status": "recorded" if inserted else "updated",
         "recorded_at": completed_at,
-        "decisions_appended": len(appended_decisions),
+        "history_initialized": initialized,
     }
     return state["history"]
 
@@ -2875,7 +2812,7 @@ def complete_run(state: dict[str, Any], stage: str) -> dict[str, Any]:
             stage=stage,
             status=history_result.get("status"),
             event_id=history_result.get("event_id"),
-            events=history_result.get("events"),
+            index=history_result.get("index"),
         )
     save_state(state)
     return state

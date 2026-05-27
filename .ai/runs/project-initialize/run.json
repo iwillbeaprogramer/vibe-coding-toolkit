@@ -510,7 +510,7 @@
       "message": "project history updated",
       "status": "recorded",
       "event_id": "20260527102007-project-initialize-full",
-      "events": ".ai/history/events.json"
+      "index": ".ai/history/index.json"
     }
   ],
   "stage_file_snapshots": {
@@ -878,14 +878,10 @@
   "history": {
     "schema_version": 1,
     "event_id": "20260527102007-project-initialize-full",
-    "events": ".ai/history/events.json",
-    "feature_summary": ".ai/history/features/project-initialize.json",
-    "risks": ".ai/history/risks.json",
-    "unresolved_items": ".ai/history/unresolved_items.json",
-    "decisions": ".ai/history/decisions.json",
+    "index": ".ai/history/index.json",
     "summary": ".ai/history/summary.md",
     "status": "recorded",
     "recorded_at": "2026-05-27T10:39:20",
-    "decisions_appended": 22
+    "history_initialized": false
   }
 }
